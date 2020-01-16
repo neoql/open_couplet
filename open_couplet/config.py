@@ -8,7 +8,6 @@ class Seq2seqConfig(object):
         self.rnn_layers = cfg.get('rnn_layers', 2)
         self.cnn_kernel_size = cfg.get('cnn_kernel_size', 3)
         self.dropout_p = cfg.get('dropout_p', 0.7)
-        self.rnn_cell = cfg.get('rnn_cell', 'lstm')
 
     @classmethod
     def from_config(cls, filename):

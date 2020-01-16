@@ -10,19 +10,6 @@ from open_couplet.models.attention import ScaledDotProductAttention
 from open_couplet.config import Seq2seqConfig
 
 
-def _rnn(rnn_cell, *args, **kwargs):
-    rnn_cell = rnn_cell.lower()
-
-    if rnn_cell == 'lstm':
-        rnn = nn.LSTM
-    elif rnn_cell == 'gru':
-        rnn = nn.GRU
-    else:
-        raise ValueError("Unsupported RNN Cell: {0}".format(rnn_cell))
-
-    return rnn(*args, **kwargs)
-
-
 def gelu(x):
     """ Implementation of the gelu activation function.
         Using OpenAI GPT's gelu (not exactly the same as BERT)
@@ -43,7 +30,7 @@ class CNN(nn.Module):
                  kernel_size: int = 3, mid: bool = True, dropout_p: float = 0.0):
         super(CNN, self).__init__()
 
-        padding: Tuple[int, int] = (kernel_size//2, (kernel_size - 1)//2) if mid else (kernel_size, 0)
+        padding: Tuple[int, int] = (kernel_size // 2, (kernel_size - 1) // 2) if mid else (kernel_size, 0)
         self.dropout_p = dropout_p
         self.mid = mid
 
@@ -71,7 +58,7 @@ class CNN(nn.Module):
 
         y = self.conv_2(h)
 
-        return y.transpose(-2, -1), (x[:, :, :ret_mem], h[:, :, :ret_mem])
+        return y.transpose(-2, -1), (x[:, :, :ret_mem], h[:, :, -ret_mem:])
 
 
 class Encoder(nn.Module):
@@ -88,13 +75,13 @@ class Encoder(nn.Module):
         self.rnn_cell = rnn_cell
 
         self.cnn = CNN(hidden_size, hidden_size, hidden_size, kernel_size=cnn_kernel_size, dropout_p=dropout_p)
-        self.rnn = _rnn(
-            rnn_cell=rnn_cell,
+        self.rnn = nn.GRU(
             input_size=hidden_size,
             hidden_size=hidden_size,
             num_layers=rnn_layers,
             dropout=dropout_p,
             bidirectional=True,
+            batch_first=True
         )
 
         self.norm_1 = nn.LayerNorm(hidden_size)
@@ -136,19 +123,16 @@ class Encoder(nn.Module):
 
         # RNN layer
         rnn_input = pack_padded_sequence(cnn_out, seq_len, batch_first=True, enforce_sorted=enforce_sorted)
+        # noinspection PyTypeChecker
         context, state = self.rnn(rnn_input)
         # (batch_size, src_len, 2, hidden_size)
-        context, _ = pad_packed_sequence(context, batch_first=True).view(batch_size, src_len, 2, -1)
+        context = pad_packed_sequence(context, batch_first=True)[0].view(batch_size, src_len, 2, -1)
         if self.dropout_p:
             context = F.dropout(context, p=self.dropout_p, training=self.training)
         context = self.norm_2(context[:, :, 0] + context[:, :, 1] + cnn_out)
 
         # cat directions
-        if isinstance(state, tuple):  # LSTM
-            state = tuple([self._cat_directions(h) for h in state])
-            state = (self.h_proj(state[0]), self.c_proj(state[1]))
-        else:
-            state = self.h_proj(self._cat_directions(state))
+        state = self.h_proj(self._cat_directions(state))
 
         return context, state
 
@@ -175,12 +159,12 @@ class Decoder(nn.Module):
 
         self.cnn = CNN(hidden_size, hidden_size, hidden_size, kernel_size=cnn_kernel_size,
                        dropout_p=dropout_p, mid=False)
-        self.rnn = _rnn(
-            rnn_cell=rnn_cell,
+        self.rnn = nn.GRU(
             input_size=hidden_size * 2,
             hidden_size=hidden_size,
             num_layers=rnn_layers,
             dropout=dropout_p,
+            batch_first=True
         )
 
         self.norm_1 = nn.LayerNorm(hidden_size)
@@ -225,7 +209,7 @@ class Decoder(nn.Module):
             embedded = F.dropout(embedded, p=self.dropout_p, training=self.training)
 
         # CNN layer
-        cnn_out, cnn_mem = self.cnn(embedded, mem=cnn_mem, ret_mem=self.cnn_kernel_size-1)
+        cnn_out, cnn_mem = self.cnn(embedded, mem=cnn_mem, ret_mem=self.cnn_kernel_size - 1)
         if self.dropout_p:
             cnn_out = F.dropout(cnn_out, p=self.dropout_p, training=self.training)
         cnn_out = self.norm_1(cnn_out + embedded)
@@ -248,35 +232,37 @@ class Decoder(nn.Module):
             out = gelu(self.fc_1(attn_out))
             if self.dropout_p:
                 out = F.dropout(out, p=self.dropout_p, training=self.training)
-            fh = out
+            fh = out.view(batch_size, self.hidden_size)
 
             outputs.append(out)
             attn_weights.append(attn_w)
 
-        prob = F.softmax(self.fc_2(torch.cat(outputs, dim=1)), dim=-1)
+        log_prob = F.log_softmax(self.fc_2(torch.cat(outputs, dim=1)), dim=-1)
 
-        return prob, (state, fh, cnn_mem), torch.cat(attn_weights, dim=1)
+        return log_prob, (state, fh, cnn_mem), torch.cat(attn_weights, dim=1)
 
 
-class Seq2seq(nn.Module):
-    def __init__(self, config: Seq2seqConfig):
-        super(Seq2seq, self).__init__()
+class Seq2seqModel(nn.Module):
+    def __init__(self, config: Seq2seqConfig, use_jit: bool = False):
+        super(Seq2seqModel, self).__init__()
 
         embedding = nn.Embedding(config.vocab_size, config.hidden_size)
 
         self.encode = Encoder(embedding, config.hidden_size, config.rnn_layers, config.cnn_kernel_size,
-                               config.dropout_p, config.rnn_cell)
-        self.decode = jit.script(Decoder(embedding, config.hidden_size, config.cnn_kernel_size,
-                                          config.rnn_layers, config.dropout_p, config.rnn_cell))
+                               config.dropout_p)
+        decode = Decoder(embedding, config.hidden_size, config.cnn_kernel_size,
+                                          config.rnn_layers, config.dropout_p)
+        self.decode = decode if not use_jit else jit.script(decode)
 
     def forward(self, x1, x2, x1_len, enforce_sorted=False):
-        attention_mask = self.attention_mask(x1_len, x1.size(1)) \
-            if x1_len.max().item() != x1_len.min().item() else None
+        fix_len = x1.size(1)
+        attention_mask = self.attention_mask(x1_len, fix_len) \
+            if x1_len.min().item() != fix_len else None
 
         context, state = self.encode(x1, x1_len, enforce_sorted)
-        prob, _, attn_weights = self.decode(x2, context, state, attention_mask=attention_mask)
+        log_prob, _, attn_weights = self.decode(x2, context, state, attention_mask=attention_mask)
 
-        return prob, attn_weights
+        return log_prob, attn_weights
 
     @staticmethod
     def attention_mask(length, fix_len):
