@@ -62,17 +62,15 @@ class CNN(nn.Module):
 
 # noinspection PyMethodMayBeStatic
 class Encoder(nn.Module):
-    __constants__ = ['hidden_size', 'rnn_layers', 'dropout_p', 'rnn_cell']
+    __constants__ = ['hidden_size', 'rnn_layers', 'cnn_kernel_size', 'dropout_p']
 
-    def __init__(self, embedding, hidden_size, rnn_layers=1, cnn_kernel_size=3, dropout_p=0.0, rnn_cell='gru'):
+    def __init__(self, embedding, hidden_size, rnn_layers=1, cnn_kernel_size=3, dropout_p=0.0):
         super(Encoder, self).__init__()
-        rnn_cell = rnn_cell.lower()
 
         self.embedding: nn.Embedding = embedding
         self.hidden_size = hidden_size
         self.rnn_layers = rnn_layers
         self.dropout_p = dropout_p
-        self.rnn_cell = rnn_cell
 
         self.cnn = CNN(hidden_size, hidden_size, hidden_size, kernel_size=cnn_kernel_size, dropout_p=dropout_p)
         self.rnn = nn.GRU(
@@ -88,8 +86,6 @@ class Encoder(nn.Module):
         self.norm_2 = nn.LayerNorm(hidden_size)
 
         self.h_proj = nn.Linear(2 * hidden_size, hidden_size, bias=False)
-        if rnn_cell == 'lstm':
-            self.c_proj = nn.Linear(2 * hidden_size, hidden_size, bias=False)
 
         self.reset_parameters()
 
@@ -146,7 +142,7 @@ class Decoder(nn.Module):
     __constants__ = ['hidden_size', 'rnn_layers', 'cnn_kernel_size', 'dropout_p']
 
     def __init__(self, embedding: nn.Embedding, hidden_size: int, cnn_kernel_size: int = 3,
-                 rnn_layers: int = 1, dropout_p: float = 0, rnn_cell: str = 'gru'):
+                 rnn_layers: int = 1, dropout_p: float = 0):
         super(Decoder, self).__init__()
 
         self.embedding = embedding
@@ -154,7 +150,6 @@ class Decoder(nn.Module):
         self.rnn_layers = rnn_layers
         self.cnn_kernel_size = cnn_kernel_size
         self.dropout_p = dropout_p
-        self.rnn_cell = rnn_cell.lower()
 
         self.cnn = CNN(hidden_size, hidden_size, hidden_size, kernel_size=cnn_kernel_size,
                        dropout_p=dropout_p, mid=False)

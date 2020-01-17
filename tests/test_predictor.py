@@ -153,6 +153,7 @@ class GoldenSeq2seqPredictor(object):
         self.decoder = model.decode
 
         self.vocab_size = vocab_size
+        self.special_token_ids = tokenizer.special_token_ids
         self.sos = tokenizer.bos_token_id
         self.pad = tokenizer.pad_token_id
         self.eos = tokenizer.eos_token_id
@@ -233,7 +234,7 @@ class GoldenSeq2seqPredictor(object):
         known_token = self._known_token(sent_pattern.unsqueeze(0), torch.tensor([tgt_len])).view(-1)
 
         # ban_token_mask: (beam_size, vocab_size)
-        ban_token_mask = self.gen_token_mask(1, beam_size, [self.sos, self.eos, self.pad])
+        ban_token_mask = self.gen_token_mask(1, beam_size, self.special_token_ids)
 
         # multi: (fix_len-1,)
         multi = sent_pattern.sum(dim=1) > 1

@@ -19,6 +19,8 @@ class Seq2seqPredictor(nn.Module):
         self.encode = model.encode
         self.decode = model.decode
 
+        self.special_token_ids = tokenizer.special_token_ids
+
         self.pad_token_id = tokenizer.pad_token_id
         self.bos_token_id = tokenizer.bos_token_id
         self.eos_token_id = tokenizer.eos_token_id
@@ -53,7 +55,7 @@ class Seq2seqPredictor(nn.Module):
 
         # ban_token_mask: (batch_size * k, vocab_size)
         ban_token_mask = self.gen_token_mask(
-            batch_size, k, torch.tensor([self.bos_token_id, self.eos_token_id, self.pad_token_id]))
+            batch_size, k, torch.tensor(self.special_token_ids))
 
         fh: Optional[torch.Tensor] = None
         cnn_mem: Optional[Tuple[torch.Tensor, torch.Tensor]] = None

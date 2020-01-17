@@ -1,5 +1,6 @@
 class Tokenizer(object):
-    SPECIAL_TOKENS_ATTRIBUTES = ['pad_token', 'bos_token', 'eos_token', 'sep_token', 'unk_token', 'mask_token']
+    SPECIAL_TOKENS_ATTRIBUTES = ['pad_token', 'bos_token', 'eos_token', 'sep_token',
+                                 'unk_token', 'mask_token', 'cls_token']
 
     def __init__(self, token_iter=None, **kwargs):
         self._bos_token = '[BOS]'
@@ -8,6 +9,7 @@ class Tokenizer(object):
         self._sep_token = '[SEP]'
         self._unk_token = '[UNK]'
         self._mask_token = '[MASK]'
+        self._cls_token = '[CLS]'
 
         self._token2id = {}
         self._id2token = []
@@ -19,10 +21,11 @@ class Tokenizer(object):
             val = kwargs.get(attr, getattr(self, attr))
             setattr(self, attr, val)
             special_tokens.append(val)
+        special_tokens = special_tokens + self._unused_tokens(20)
 
         if init:
             token_iter = special_tokens
-        self.special_tokens = special_tokens
+        self._special_tokens = special_tokens
 
         for token in token_iter:
             assert isinstance(token, str)
@@ -30,6 +33,13 @@ class Tokenizer(object):
             assert token not in self._token2id
             self._token2id[token] = len(self._id2token)
             self._id2token.append(token)
+
+    # noinspection PyMethodMayBeStatic
+    def _unused_tokens(self, number):
+        tokens = []
+        for i in range(number):
+            tokens.append(f'[unused{i}]')
+        return tokens
 
     @classmethod
     def from_vocab(cls, vocab_file, **kwargs):
@@ -72,6 +82,14 @@ class Tokenizer(object):
         return len(add_tokens)
 
     @property
+    def special_tokens(self):
+        return self._special_tokens
+
+    @property
+    def special_token_ids(self):
+        return self.convert_tokens_to_ids(self.special_tokens)
+
+    @property
     def vocab_size(self):
         return len(self._token2id)
 
@@ -99,6 +117,10 @@ class Tokenizer(object):
     def mask_token(self):
         return self._mask_token
 
+    @property
+    def cls_token(self):
+        return self._cls_token
+
     @bos_token.setter
     def bos_token(self, bos_token):
         self._bos_token = bos_token
@@ -122,6 +144,10 @@ class Tokenizer(object):
     @mask_token.setter
     def mask_token(self, mask_token):
         self._mask_token = mask_token
+
+    @cls_token.setter
+    def cls_token(self, cls_token):
+        self._cls_token = cls_token
 
     @property
     def bos_token_id(self):
@@ -147,8 +173,6 @@ class Tokenizer(object):
     def mask_token_id(self):
         return self.convert_tokens_to_ids(self.mask_token)
 
-
-if __name__ == '__main__':
-    t = Tokenizer()
-    t.add_tokens(list('我爱中国'))
-    t.save_vocab('vocab.txt')
+    @property
+    def cls_token_id(self):
+        return self.convert_tokens_to_ids(self.cls_token)
