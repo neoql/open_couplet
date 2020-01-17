@@ -134,14 +134,14 @@ class TestSeq2seqPredictor(object):
 
 def sample_case1():
     sentence = torch.tensor([
-        [13, 14, 15, 16, 17, 2],
-        [13, 14, 15, 16, 13, 2],
-        [13, 14, 15, 16, 12, 0],
-        [13, 14, 13, 14,  2, 0],
-        [19, 18, 17,  2,  0, 0],
+        [1, 13, 14, 15, 16, 17, 2],
+        [1, 13, 14, 15, 16, 13, 2],
+        [1, 13, 14, 15, 16, 12, 0],
+        [1, 13, 14, 13, 14,  2, 0],
+        [1, 19, 18, 17,  2,  0, 0],
     ])
 
-    length = torch.tensor([6, 6, 5, 5, 4])
+    length = torch.tensor([7, 7, 6, 6, 5])
 
     return sentence, length
 
@@ -166,14 +166,15 @@ class GoldenSeq2seqPredictor(object):
         # pad_mask: (batch_size, total_len)
         # sent_pattern: (batch_size, total_len, total_len)
         pad_mask = source.eq(self.pad)
-        sent_pattern = utils.sentence_pattern(source, pad_mask=pad_mask)
+        sub_pad_mask = source[:, 1:].eq(self.pad)
+        sent_pattern = utils.sentence_pattern(source[:, 1:], pad_mask=sub_pad_mask)
 
         # encode source
         # context: (batch_size, max_len, 2 * enc_rnn_units)
         # state: (layers, batch_size, 2 * enc_rnn_units)
         context, state = self.encoder(source, length)
 
-        batch_size, total_length = source.size()
+        batch_size, fix_len = source.size()
 
         output = []
         scores = []
@@ -188,11 +189,11 @@ class GoldenSeq2seqPredictor(object):
             output_i, scores_i = self._beam_search_single(
                 context=context_i,
                 state=state_i,
-                length=length_i,
-                total_length=total_length,
+                src_len=length_i,
+                fix_len=fix_len,
                 beam_size=beam_size,
                 sent_pattern=sent_pattern_i,
-                pad_mask=pad_mask_i,
+                attention_mask=pad_mask_i,
             )
 
             output += [output_i]
@@ -203,21 +204,24 @@ class GoldenSeq2seqPredictor(object):
 
         return output, scores
 
-    def _beam_search_single(self, context, state, length, total_length, beam_size, sent_pattern, pad_mask):
+    def _beam_search_single(self, context, state, src_len, fix_len, beam_size, sent_pattern, attention_mask):
         """
         :param context: (total_length, 2 * enc_rnn_units)
         :param state: (layers, 2 * enc_rnn_units)
-        :param length: scalar
-        :param total_length: scalar
+        :param src_len: scalar
+        :param fix_len: scalar
         :param beam_size: scalar
         :param sent_pattern: (total_length, total_length)
-        :param pad_mask: (total_length,)
+        :param attention_mask: (total_length,)
         :return:
             output: (beam_size, total_length)
             scores: (beam_size,)
         """
-        out = torch.full([beam_size, total_length], fill_value=self.pad).long()
-        out[:, length-1] = self.eos
+        fix_len_less_one = fix_len - 1
+        tgt_len = src_len - 1
+
+        out = torch.full([beam_size, fix_len_less_one], fill_value=self.pad).long()
+        out[:, tgt_len - 1] = self.eos
 
         scores = torch.zeros(beam_size, 1).float()
         scores[1:, :] = -inf
@@ -226,23 +230,23 @@ class GoldenSeq2seqPredictor(object):
         state = torch.stack([state] * beam_size, dim=1)
 
         # known_token: (total_len,)
-        known_token = self._known_token(sent_pattern.unsqueeze(0), torch.tensor([length])).view(-1)
+        known_token = self._known_token(sent_pattern.unsqueeze(0), torch.tensor([tgt_len])).view(-1)
 
         # ban_token_mask: (beam_size, vocab_size)
         ban_token_mask = self.gen_token_mask(1, beam_size, [self.sos, self.eos, self.pad])
 
-        # multi: (total_length,)
+        # multi: (fix_len-1,)
         multi = sent_pattern.sum(dim=1) > 1
 
         # pad_mask: (beam_size, total_length)
-        pad_mask = pad_mask.expand(beam_size, -1)
+        attention_mask = attention_mask.expand(beam_size, -1)
         fh = None
         cnn_mem = None
 
         input_var = torch.full([beam_size, 1], self.sos).long()
-        for i in range(length):
+        for i in range(tgt_len):
             log_prob, (state, fh, cnn_mem), attn_weights = self.decoder(
-                input_var, context, state, fh, pad_mask.unsqueeze(1), cnn_mem
+                input_var, context, state, fh, attention_mask.unsqueeze(1), cnn_mem
             )
 
             # scores: (beam_size, vocab_size)
@@ -267,7 +271,7 @@ class GoldenSeq2seqPredictor(object):
             k_indices = candidates // self.vocab_size
 
             # re-rank
-            # out: (beam_size, total_len)
+            # out: (beam_size, fix_len)
             out = out[k_indices]
             state = state[:, k_indices, :]
             fh = fh[k_indices]

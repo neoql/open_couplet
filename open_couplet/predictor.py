@@ -23,24 +23,29 @@ class Seq2seqPredictor(nn.Module):
         self.bos_token_id = tokenizer.bos_token_id
         self.eos_token_id = tokenizer.eos_token_id
 
-    def forward(self, source: torch.Tensor, seq_len: torch.Tensor, beam_size: int = 1):
+    def forward(self, source: torch.Tensor, src_len: torch.Tensor, beam_size: int = 1):
         assert beam_size > 0
         k = beam_size
 
         batch_size, fix_len = source.size()
+        src_without_bos = source[:, 1:]
+        fix_len_less_one = fix_len - 1
+        tgt_len = src_len - 1
 
         # pad_mask: (batch_size, fix_len)
         pad_mask: Optional[torch.Tensor] = source.eq(self.pad_token_id) \
-            if seq_len.min().item() != fix_len else None
+            if src_len.min().item() != fix_len else None
+        sub_pad_mask: Optional[torch.Tensor] = src_without_bos.eq(self.pad_token_id) \
+            if src_len.min().item() != fix_len else None
 
         # Initialize the scores; for the first step,
         # scores: (batch_size * k, 1)
         scores = torch.full([batch_size * k, 1], fill_value=float('-inf')).to(source.device)
         scores.index_fill_(0, torch.tensor([i * k for i in range(0, batch_size)]), 0.0)
 
-        # output: (batch_size, k, fix_len)
-        output = torch.full([batch_size, k, fix_len], fill_value=self.pad_token_id).long().to(source.device)
-        output[torch.arange(batch_size).long(), :, seq_len - 1] = torch.tensor(self.eos_token_id)
+        # output: (batch_size, k, fix_len-1)
+        output = torch.full([batch_size, k, fix_len_less_one], fill_value=self.pad_token_id).long().to(source.device)
+        output[torch.arange(batch_size).long(), :, tgt_len - 1] = torch.tensor(self.eos_token_id)
 
         # Initialize input variable of decoder
         # input_var: (batch_size * k, 1)
@@ -52,20 +57,20 @@ class Seq2seqPredictor(nn.Module):
 
         fh: Optional[torch.Tensor] = None
         cnn_mem: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
-        # (batch_size, fix_len, fix_len)
-        sent_pattern = utils.sentence_pattern(source, pad_mask=pad_mask)
+        # (batch_size, fix_len-1, fix_len-1)
+        sent_pattern = utils.sentence_pattern(src_without_bos, pad_mask=sub_pad_mask)
 
-        # known_token: (batch_size, fix_len)
-        # known: (batch_size, k, fix_len)
-        known_token = self._known_token(sent_pattern, seq_len).to(source.device)
+        # known_token: (batch_size, fix_len-1)
+        # known: (batch_size, k, fix_len-1)
+        known_token = self._known_token(sent_pattern, tgt_len).to(source.device)
         known = torch.stack([known_token] * k, dim=1)
-        # multi: (batch_size, fix_len)
+        # multi: (batch_size, fix_len-1)
         multi = sent_pattern.sum(dim=2) > 1
 
         # encode source
-        # context: (batch_size, src_len, hidden_size)
+        # context: (batch_size, fix_len, hidden_size)
         # state: (layers, batch_size, hidden_size)
-        context, state = self.encode(source, seq_len)
+        context, state = self.encode(source, src_len)
 
         context = torch.stack([context] * k, dim=1).flatten(0, 1)
         state = torch.stack([state] * k, dim=2).flatten(1, 2)
@@ -74,10 +79,10 @@ class Seq2seqPredictor(nn.Module):
         attention_mask: Optional[torch.Tensor] = torch.stack([pad_mask] * k, dim=1).flatten(0, 1).unsqueeze(1) \
             if pad_mask is not None else None
 
-        end_indices_list: Optional[List[torch.Tensor]] = attention_mask.chunk(fix_len, dim=-1) \
+        end_indices_list: Optional[List[torch.Tensor]] = attention_mask.chunk(fix_len, dim=-1)[1:] \
             if attention_mask is not None else None
 
-        for i in range(fix_len):
+        for i in range(fix_len_less_one):
             log_prob, (state, fh, cnn_mem), attn_weights = self.decode(
                 input_var, context, state, fh, attention_mask, cnn_mem
             )
@@ -135,7 +140,7 @@ class Seq2seqPredictor(nn.Module):
                 output[:, :, i] = symbol
             ban_token_mask[torch.arange(batch_size * k).long(), symbol.view(-1)] = torch.tensor(1, dtype=torch.bool)
 
-        return output.view(batch_size, k, fix_len), scores.view(batch_size, k)
+        return output.view(batch_size, k, fix_len_less_one), scores.view(batch_size, k)
 
     def gen_token_mask(self, batch_size: int, k: int, tokens: torch.Tensor):
         """
