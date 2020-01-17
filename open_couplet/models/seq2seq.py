@@ -1,7 +1,6 @@
 import math
 import torch
 import torch.nn as nn
-import torch.jit as jit
 import torch.nn.functional as F
 
 from typing import Optional, Tuple
@@ -61,6 +60,7 @@ class CNN(nn.Module):
         return y.transpose(-2, -1), (x[:, :, :ret_mem], h[:, :, -ret_mem:])
 
 
+# noinspection PyMethodMayBeStatic
 class Encoder(nn.Module):
     __constants__ = ['hidden_size', 'rnn_layers', 'dropout_p', 'rnn_cell']
 
@@ -96,7 +96,7 @@ class Encoder(nn.Module):
     def reset_parameters(self):
         pass
 
-    def forward(self, source, seq_len, enforce_sorted=False):
+    def forward(self, source: torch.Tensor, seq_len: torch.Tensor, enforce_sorted: bool = False):
         """
         :param source: (batch_size, src_len) source sequences
         :param seq_len: (batch_size,) sequence length of source sequences
@@ -136,8 +136,7 @@ class Encoder(nn.Module):
 
         return context, state
 
-    @staticmethod
-    def _cat_directions(h):
+    def _cat_directions(self, h):
         """(layers * directions, batch, hidden_size) -> (layers, batch, directions * hidden_size)"""
         return torch.cat([h[0:h.size(0):2], h[1:h.size(0):2]], 2)
 
@@ -242,19 +241,19 @@ class Decoder(nn.Module):
         return log_prob, (state, fh, cnn_mem), torch.cat(attn_weights, dim=1)
 
 
+# noinspection PyMethodMayBeStatic
 class Seq2seqModel(nn.Module):
-    def __init__(self, config: Seq2seqConfig, use_jit: bool = False):
+    def __init__(self, config: Seq2seqConfig):
         super(Seq2seqModel, self).__init__()
 
         embedding = nn.Embedding(config.vocab_size, config.hidden_size)
 
         self.encode = Encoder(embedding, config.hidden_size, config.rnn_layers, config.cnn_kernel_size,
                                config.dropout_p)
-        decode = Decoder(embedding, config.hidden_size, config.cnn_kernel_size,
-                                          config.rnn_layers, config.dropout_p)
-        self.decode = decode if not use_jit else jit.script(decode)
+        self.decode = Decoder(embedding, config.hidden_size, config.cnn_kernel_size,
+                              config.rnn_layers, config.dropout_p)
 
-    def forward(self, x1, x2, x1_len, enforce_sorted=False):
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor, x1_len: torch.Tensor, enforce_sorted: bool = False):
         fix_len = x1.size(1)
         attention_mask = self.attention_mask(x1_len, fix_len) \
             if x1_len.min().item() != fix_len else None
@@ -264,7 +263,6 @@ class Seq2seqModel(nn.Module):
 
         return log_prob, attn_weights
 
-    @staticmethod
-    def attention_mask(length, fix_len):
+    def attention_mask(self, length: torch.Tensor, fix_len: int):
         mask = (torch.arange(0, fix_len) < length.unsqueeze(-1))
         return mask
