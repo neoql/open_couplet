@@ -1,4 +1,5 @@
 import torch
+import torch.jit as jit
 
 from math import inf
 
@@ -47,7 +48,7 @@ class TestSeq2seqPredictor(object):
         batch_size, k = 3, 2
         sos, pad, eos = self.tokenizer.bos_token_id, self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
 
-        ban_token_mask = self.predictor.gen_token_mask(batch_size, k, [sos, pad, eos])
+        ban_token_mask = self.predictor.gen_token_mask(batch_size, k, torch.tensor([sos, pad, eos]))
         ban_token_mask[:, [5, 10, 15]] = 1
 
         known = torch.stack([torch.tensor([False, True, True])] * k, dim=1)
@@ -97,23 +98,35 @@ class TestSeq2seqPredictor(object):
     def test_predict_prob(self):
         self.model.eval()
         test_predictor = GoldenSeq2seqPredictor(self.model, self.predictor.vocab_size, self.tokenizer)
+        jit_predictor = jit.script(self.predictor)
 
         sentence, length = sample_case1()
+        eps = 1e-5
+
+        golden_output, golden_scores = test_predictor.predict_prob(sentence, length, beam_size=1)
 
         with torch.no_grad():
             output, scores = self.predictor(sentence, length, beam_size=1)
-        golden_output, golden_scores = test_predictor.predict_prob(sentence, length, beam_size=1)
-
-        eps = 1e-5
 
         assert torch.norm(scores - golden_scores) < eps
         assert torch.equal(output, golden_output)
 
-        eps = 1e-5
+        with torch.no_grad():
+            output, scores = jit_predictor(sentence, length, beam_size=1)
+
+        assert torch.norm(scores - golden_scores) < eps
+        assert torch.equal(output, golden_output)
+
+        golden_output, golden_scores = test_predictor.predict_prob(sentence, length, beam_size=3)
 
         with torch.no_grad():
             output, scores = self.predictor(sentence, length, beam_size=3)
-        golden_output, golden_scores = test_predictor.predict_prob(sentence, length, beam_size=3)
+
+        assert torch.norm(scores - golden_scores, p=inf) < eps
+        assert torch.equal(output, golden_output)
+
+        with torch.no_grad():
+            output, scores = jit_predictor(sentence, length, beam_size=3)
 
         assert torch.norm(scores - golden_scores, p=inf) < eps
         assert torch.equal(output, golden_output)
