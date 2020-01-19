@@ -16,7 +16,7 @@ class TestSeq2seqPredictor(object):
     def setup_class(cls):
         config = Seq2seqConfig(vocab_size=50, hidden_size=100)
 
-        cls.tokenizer = Tokenizer()
+        cls.tokenizer = Tokenizer(unused_tokens=0)
         cls.model = Seq2seqModel(config)
         cls.predictor = Seq2seqPredictor(cls.model, cls.tokenizer)
         cls.predictor.vocab_size = 50
@@ -103,6 +103,9 @@ class TestSeq2seqPredictor(object):
         sentence, length = sample_case1()
         eps = 1e-5
 
+        pad_mask = sentence[:, 1:] == 0
+        golden_pattern = utils.sentence_pattern(sentence[:, 1:], pad_mask=pad_mask)
+
         golden_output, golden_scores = test_predictor.predict_prob(sentence, length, beam_size=1)
 
         with torch.no_grad():
@@ -110,12 +113,14 @@ class TestSeq2seqPredictor(object):
 
         assert torch.norm(scores - golden_scores) < eps
         assert torch.equal(output, golden_output)
+        assert torch.equal(utils.sentence_pattern(output[:, 0, :], pad_mask=pad_mask), golden_pattern)
 
         with torch.no_grad():
             output, scores = jit_predictor(sentence, length, beam_size=1)
 
         assert torch.norm(scores - golden_scores) < eps
         assert torch.equal(output, golden_output)
+        assert torch.equal(utils.sentence_pattern(output[:, 0, :], pad_mask=pad_mask), golden_pattern)
 
         golden_output, golden_scores = test_predictor.predict_prob(sentence, length, beam_size=3)
 
@@ -124,21 +129,25 @@ class TestSeq2seqPredictor(object):
 
         assert torch.norm(scores - golden_scores, p=inf) < eps
         assert torch.equal(output, golden_output)
+        for i in range(3):
+            assert torch.equal(utils.sentence_pattern(output[:, i, :], pad_mask=pad_mask), golden_pattern)
 
         with torch.no_grad():
             output, scores = jit_predictor(sentence, length, beam_size=3)
 
         assert torch.norm(scores - golden_scores, p=inf) < eps
         assert torch.equal(output, golden_output)
+        for i in range(3):
+            assert torch.equal(utils.sentence_pattern(output[:, i, :], pad_mask=pad_mask), golden_pattern)
 
 
 def sample_case1():
     sentence = torch.tensor([
         [1, 13, 14, 15, 16, 17, 2],
-        [1, 13, 14, 15, 16, 13, 2],
-        [1, 13, 14, 15, 16, 12, 0],
-        [1, 13, 14, 13, 14,  2, 0],
-        [1, 19, 18, 17,  2,  0, 0],
+        [1, 47, 44, 45, 46, 47, 2],
+        [1, 28, 29, 20, 31,  2, 0],
+        [1, 18, 19, 18, 19,  2, 0],
+        [1, 39, 38, 37,  2,  0, 0],
     ])
 
     length = torch.tensor([7, 7, 6, 6, 5])

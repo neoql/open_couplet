@@ -37,8 +37,14 @@ class CNN(nn.Module):
         self.conv_1 = nn.Conv1d(input_size, hidden_size, kernel_size=kernel_size, padding=0)
         self.conv_2 = nn.Conv1d(hidden_size, output_size, kernel_size=kernel_size, padding=0)
 
-    def forward(self, x: torch.Tensor, mem: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, ret_mem: int = 0):
+    def forward(self, x: torch.Tensor,
+                mem: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                mask: Optional[torch.Tensor] = None,
+                ret_mem: int = 0):
         x = x.transpose(-2, -1)
+
+        if mask is not None:
+            x = x.masked_fill(mask, 0.0)
 
         if mem is not None:
             x = torch.cat([mem[0], x], dim=-1)
@@ -49,6 +55,9 @@ class CNN(nn.Module):
 
         if self.dropout_p > 0:
             h = F.dropout(h, p=self.dropout_p, training=self.training)
+
+        if mask is not None:
+            h = h.masked_fill(mask, 0.0)
 
         if mem is not None:
             h = torch.cat([mem[1], h], dim=-1)
@@ -85,17 +94,21 @@ class Encoder(nn.Module):
         self.norm_1 = nn.LayerNorm(hidden_size)
         self.norm_2 = nn.LayerNorm(hidden_size)
 
-        self.h_proj = nn.Linear(2 * hidden_size, hidden_size, bias=False)
+        self.h_proj = nn.Linear(2 * hidden_size, hidden_size)
 
         self.reset_parameters()
 
     def reset_parameters(self):
         pass
 
-    def forward(self, source: torch.Tensor, seq_len: torch.Tensor, enforce_sorted: bool = False):
+    def forward(self, source: torch.Tensor,
+                seq_len: torch.Tensor,
+                mask: Optional[torch.Tensor] = None,
+                enforce_sorted: bool = False):
         """
         :param source: (batch_size, src_len) source sequences
         :param seq_len: (batch_size,) sequence length of source sequences
+        :param mask: pad mask
         :param enforce_sorted: if True, the source is expected to contain sequences sorted by
             length in a decreasing order. If False, this condition is not checked. Default: True.
         :return: context, hidden
@@ -112,7 +125,7 @@ class Encoder(nn.Module):
             embedded = F.dropout(embedded, p=self.dropout_p, training=self.training)
 
         # CNN layer
-        cnn_out, _ = self.cnn(embedded)
+        cnn_out, _ = self.cnn(embedded, mask=mask)
         if self.dropout_p:
             cnn_out = F.dropout(cnn_out, p=self.dropout_p, training=self.training)
         cnn_out = self.norm_1(embedded + cnn_out)
@@ -128,7 +141,7 @@ class Encoder(nn.Module):
         context = self.norm_2(context[:, :, 0] + context[:, :, 1] + cnn_out)
 
         # cat directions
-        state = self.h_proj(self._cat_directions(state))
+        state = torch.tanh(self.h_proj(self._cat_directions(state)))
 
         return context, state
 
@@ -259,5 +272,5 @@ class Seq2seqModel(nn.Module):
         return log_prob, attn_weights
 
     def attention_mask(self, length: torch.Tensor, fix_len: int):
-        mask = (torch.arange(0, fix_len) < length.unsqueeze(-1))
-        return mask
+        mask = (torch.arange(0, fix_len) >= length.unsqueeze(-1))
+        return mask.unsqueeze(1)

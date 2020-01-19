@@ -21,7 +21,7 @@ class Tokenizer(object):
             val = kwargs.get(attr, getattr(self, attr))
             setattr(self, attr, val)
             special_tokens.append(val)
-        special_tokens = special_tokens + self._unused_tokens(20)
+        special_tokens = special_tokens + self._unused_tokens(kwargs.get('unused_tokens', 20))
 
         if init:
             token_iter = special_tokens
@@ -36,6 +36,8 @@ class Tokenizer(object):
 
     # noinspection PyMethodMayBeStatic
     def _unused_tokens(self, number):
+        if number == 0:
+            return []
         tokens = []
         for i in range(number):
             tokens.append(f'[unused{i}]')
