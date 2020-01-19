@@ -1,3 +1,4 @@
+import re
 import torch
 
 from typing import Optional
@@ -35,3 +36,38 @@ def sentence_pattern(sent: torch.Tensor, pad_mask: Optional[torch.Tensor] = None
         pattern = pattern.masked_fill(pad_mask.unsqueeze(1), 0)
 
     return pattern
+
+
+_quotes_block_regex = re.compile(r'".*?"')
+
+
+def replace_en_punctuation(string: str) -> str:
+    """Replace punctuations from English to Chinese"""
+    mapping = {
+        ',':  '，',
+        '.':  '。',
+        '(':  '（',
+        ')':  '）',
+        ':':  '：',
+        ';':  '；',
+        '?':  '？',
+        '!':  '！',
+        '<':  '《',
+        '>':  '》',
+        '[':  '【',
+        ']':  '】',
+        '\\': '、',
+        '~':  '～',
+    }
+
+    li = list(string)
+
+    for i, c in enumerate(string):
+        if c in mapping:
+            li[i] = mapping[c.replace('\'', '\"')]  # Normalize the quotes
+
+    for sep in _quotes_block_regex.finditer(''.join(li)):
+        li[sep.start()] = "“"
+        li[sep.end()-1] = "”"
+
+    return ''.join(li)

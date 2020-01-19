@@ -16,7 +16,7 @@ class TestSeq2seqPredictor(object):
     def setup_class(cls):
         config = Seq2seqConfig(vocab_size=50, hidden_size=100)
 
-        cls.tokenizer = Tokenizer(unused_tokens=0)
+        cls.tokenizer = Tokenizer()
         cls.model = Seq2seqModel(config)
         cls.predictor = Seq2seqPredictor(cls.model, cls.tokenizer)
         cls.predictor.vocab_size = 50

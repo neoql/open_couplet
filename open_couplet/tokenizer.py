@@ -21,7 +21,7 @@ class Tokenizer(object):
             val = kwargs.get(attr, getattr(self, attr))
             setattr(self, attr, val)
             special_tokens.append(val)
-        special_tokens = special_tokens + self._unused_tokens(kwargs.get('unused_tokens', 20))
+        special_tokens = special_tokens + kwargs.get('unused_tokens', [])
 
         if init:
             token_iter = special_tokens
@@ -34,14 +34,7 @@ class Tokenizer(object):
             self._token2id[token] = len(self._id2token)
             self._id2token.append(token)
 
-    # noinspection PyMethodMayBeStatic
-    def _unused_tokens(self, number):
-        if number == 0:
-            return []
-        tokens = []
-        for i in range(number):
-            tokens.append(f'[unused{i}]')
-        return tokens
+        self.check_valid()
 
     @classmethod
     def from_vocab(cls, vocab_file, **kwargs):
@@ -53,6 +46,14 @@ class Tokenizer(object):
             for token in self._token2id:
                 fp.write(f'{token}\n')
             fp.flush()
+
+    def check_valid(self):
+        assert len(self._token2id) == len(self._id2token)
+        for token in self.special_tokens:
+            assert token in self
+
+    def __contains__(self, token):
+        return token in self._token2id
 
     def convert_ids_to_tokens(self, ids):
         if isinstance(ids, int):
