@@ -263,14 +263,14 @@ class Seq2seqModel(nn.Module):
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor, x1_len: torch.Tensor, enforce_sorted: bool = False):
         fix_len = x1.size(1)
-        attention_mask = self.attention_mask(x1_len, fix_len) \
+        mask = self.attention_mask(x1_len, fix_len) \
             if x1_len.min().item() != fix_len else None
 
-        context, state = self.encode(x1, x1_len, enforce_sorted)
-        log_prob, _, attn_weights = self.decode(x2, context, state, attention_mask=attention_mask)
+        context, state = self.encode(x1, x1_len, mask=mask, enforce_sorted=enforce_sorted)
+        log_prob, _, attn_weights = self.decode(x2, context, state, attention_mask=mask)
 
         return log_prob, attn_weights
 
     def attention_mask(self, length: torch.Tensor, fix_len: int):
-        mask = (torch.arange(0, fix_len) >= length.unsqueeze(-1))
+        mask = (torch.arange(0, fix_len).to(length.device) >= length.unsqueeze(-1))
         return mask.unsqueeze(1)
