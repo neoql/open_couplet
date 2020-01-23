@@ -1,3 +1,4 @@
+import os
 import math
 import torch
 import torch.nn as nn
@@ -253,6 +254,7 @@ class Decoder(nn.Module):
 class Seq2seqModel(nn.Module):
     def __init__(self, config: Seq2seqConfig):
         super(Seq2seqModel, self).__init__()
+        self.config = config
 
         embedding = nn.Embedding(config.vocab_size, config.hidden_size)
 
@@ -274,3 +276,13 @@ class Seq2seqModel(nn.Module):
     def attention_mask(self, length: torch.Tensor, fix_len: int):
         mask = (torch.arange(0, fix_len).to(length.device) >= length.unsqueeze(-1))
         return mask.unsqueeze(1)
+
+    def save_trained(self, dirname):
+        self.config.save_config(os.path.join(dirname, 'config.json'))
+        torch.save(self.state_dict(), os.path.join(dirname, 'model.bin'))
+
+    @classmethod
+    def from_trained(cls, dirname):
+        config = Seq2seqConfig.from_config(os.path.join(dirname, 'config.json'))
+        model = cls(config)
+        model.load_state_dict(torch.load(os.path.join(dirname, 'model.bin'), map_location='cpu'))

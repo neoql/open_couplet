@@ -179,3 +179,9 @@ class Tokenizer(object):
     @property
     def cls_token_id(self):
         return self.convert_tokens_to_ids(self.cls_token)
+
+
+class Seq2seqTokenizer(Tokenizer):
+    def __init__(self, token_iter=None, **kwargs):
+        super(Seq2seqTokenizer, self).__init__(
+            token_iter, unused_tokens=[f'[unused{i}]' for i in range(10)], **kwargs)
