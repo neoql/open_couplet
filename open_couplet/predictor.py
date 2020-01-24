@@ -72,7 +72,7 @@ class Seq2seqPredictor(nn.Module):
         # encode source
         # context: (batch_size, fix_len, hidden_size)
         # state: (layers, batch_size, hidden_size)
-        context, state = self.encode(source, src_len)
+        context, state = self.encode(source, src_len, mask=source.eq(self.pad_token_id).unsqueeze(1))
 
         context = torch.stack([context] * k, dim=1).flatten(0, 1)
         state = torch.stack([state] * k, dim=2).flatten(1, 2)

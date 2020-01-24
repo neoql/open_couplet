@@ -182,7 +182,7 @@ class GoldenSeq2seqPredictor(object):
         # encode source
         # context: (batch_size, max_len, 2 * enc_rnn_units)
         # state: (layers, batch_size, 2 * enc_rnn_units)
-        context, state = self.encoder(source, length)
+        context, state = self.encoder(source, length, mask=pad_mask.unsqueeze(1))
 
         batch_size, fix_len = source.size()
 

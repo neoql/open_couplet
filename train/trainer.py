@@ -10,28 +10,28 @@ import torch.jit as jit
 from tqdm import tqdm
 from collections import deque
 from tensorboardX import SummaryWriter
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torch.optim import Adam
 
 from open_couplet.models.seq2seq import Seq2seqModel
 from open_couplet.tokenizer import Seq2seqTokenizer
-from train.data import ParallelDataset, RandomBatchSampler, Seq2seqCollectWrapper
+from train.data import RandomBatchSampler, Seq2seqCollectWrapper
 
 
 class Seq2seqTrainer(object):
     def __init__(self,
-                 train_set_dir: str,
-                 dev_set_dir: str,
-                 vocab_file: str,
+                 train_set: Dataset,
+                 dev_set: Dataset,
+                 tokenizer: Seq2seqTokenizer,
                  save_dir: str,
                  logging_dir: str,
                  logging_every: int,
                  save_eval_every: int,
-                 max_ckpt_num: int):
+                 max_ckpt_num: int,
+                 logger: logging.Logger):
 
-        self.train_set_dir = train_set_dir
-        self.dev_set_dir = dev_set_dir
-        self.vocab_file = vocab_file
+        self.train_set = train_set
+        self.dev_set = dev_set
 
         self.logging_dir = logging_dir
         self.save_dir = save_dir
@@ -39,8 +39,8 @@ class Seq2seqTrainer(object):
         self.logging_every = logging_every
         self.save_eval_every = save_eval_every
 
-        self.logger = logging.getLogger("Seq2seqTrainer")
-        self.tokenizer = Seq2seqTokenizer.from_vocab(self.vocab_file)
+        self.tokenizer = tokenizer
+        self.logger = logger
         self.ckpt_manager = CheckpointManager(save_dir, max_ckpt_num, model_class=Seq2seqModel)
 
     def train(self, model,
@@ -55,19 +55,12 @@ class Seq2seqTrainer(object):
 
         tb_writer = SummaryWriter(self.logging_dir)
 
-        self.logger.info('Start loading training set ...')
-        train_set = ParallelDataset(self.train_set_dir, pbar=True, sort=True)
-        self.logger.info('The training set is loaded completely!')
-
-        self.logger.info('Start loading dev set ...')
-        dev_set = ParallelDataset(self.dev_set_dir, pbar=True, sort=True)
-        self.logger.info('The dev set is loaded completely!')
-
-        loss_fn = nn.NLLLoss(ignore_index=self.tokenizer.pad_token_id, reduction='sum')
+        loss_fn = nn.NLLLoss(ignore_index=self.tokenizer.pad_token_id, reduction='mean')
 
         collect_wrapper = Seq2seqCollectWrapper(self.tokenizer, enforce_sorted=True)
 
         if resume:
+            self.ckpt_manager.resume()
             latest_ckpt_dir, latest_ckpt = self.ckpt_manager.get_latest_checkpoint()
             self.logger.info(f'resume from checkpoint "{latest_ckpt_dir}"')
             model = latest_ckpt.model
@@ -89,7 +82,7 @@ class Seq2seqTrainer(object):
             model = model.cuda()
             loss_fn = loss_fn.cuda()
 
-        steps_per_epoch = len(train_set)
+        steps_per_epoch = len(self.train_set)
 
         attempt_times = 0
         early_stop_flag = False
@@ -98,9 +91,9 @@ class Seq2seqTrainer(object):
             if resume and global_step//steps_per_epoch < epoch:
                 continue
 
-            sampler = RandomBatchSampler(train_set, batch_size=batch_size)
-            train_dl = DataLoader(train_set, batch_sampler=sampler, collate_fn=collect_wrapper)
-            batch_iter = tqdm(enumerate(train_dl), desc=f'Epoch-{epoch+1}', unit=' step')
+            sampler = RandomBatchSampler(self.train_set, batch_size=batch_size)
+            train_dl = DataLoader(self.train_set, batch_sampler=sampler, collate_fn=collect_wrapper)
+            batch_iter = tqdm(enumerate(train_dl), total=len(train_dl), desc=f'Epoch-{epoch+1}', unit=' step')
 
             if resume:
                 batch_iter = itertools.dropwhile(lambda n, _: n == global_step % steps_per_epoch, batch_iter)
@@ -111,8 +104,8 @@ class Seq2seqTrainer(object):
 
                 x1, x2, y, x1_len = batch
 
-                log_prob, _, attn_weights = model(x1, x2, x1_len, enforce_sorted=True)
-                loss = loss_fn(log_prob, y)
+                log_prob, attn_weights = model(x1, x2, x1_len, enforce_sorted=True)
+                loss = loss_fn(log_prob.flatten(0, 1), y.flatten(0, 1))
 
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -120,7 +113,7 @@ class Seq2seqTrainer(object):
                 model.zero_grad()
 
                 loss_val = loss.item()
-                acc = self.compute_accuracy(log_prob.detach(), y.detach())
+                acc = self.compute_accuracy(log_prob.detach(), y.detach()).item()
 
                 batch_iter.set_postfix({'Loss': loss_val, 'Accuracy': acc})
 
@@ -134,8 +127,11 @@ class Seq2seqTrainer(object):
                     logging_loss, logging_acc = tr_loss, tr_acc
 
                 if global_step % self.save_eval_every == 0:
-                    states = self.evaluate(model, loss_fn, dev_set)
+                    states = self.evaluate(model, loss_fn, self.dev_set)
                     batch_iter.write(f'Step-{global_step} evaluate result: f{states}')
+
+                    tb_writer.add_scalar("eval/Loss", states['dev_loss'], global_step)
+                    tb_writer.add_scalar('eval/Accuracy', states['dev_acc'], global_step)
 
                     states.update({
                         'loss': loss_val,
@@ -178,9 +174,9 @@ class Seq2seqTrainer(object):
 
     def compute_accuracy(self, log_prob: torch.Tensor, y: torch.Tensor):
         mask = y != self.tokenizer.pad_token_id
-        pred_y = log_prob.masked_select(mask).argmax(dim=-1)
         golden_y = y.masked_select(mask)
-        return (pred_y == golden_y) / pred_y.size(0)
+        pred_y = log_prob.argmax(-1).masked_select(mask)
+        return (pred_y == golden_y).sum() / pred_y.size(0)
 
     @torch.no_grad()
     def evaluate(self, model, loss_fn, dev_set, use_cuda=True):
@@ -215,6 +211,9 @@ class Checkpoint(object):
         self.trainer_states = trainer_states
 
     def save(self, dirname):
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
+
         if isinstance(self.model, jit.ScriptModule):
             self.model.save(os.path.join(dirname, self.JIT_MODEL_NAME))
         else:
@@ -244,16 +243,20 @@ class CheckpointManager(object):
         self.min_dev_loss = float('inf')
         self.min_dev_loss_ckpt = None
 
-        self.checkpoints = deque(max_ckpt_num)
+        self.checkpoints = deque(maxlen=max_ckpt_num)
 
-        self._load_checkpoints()
+        if not os.path.exists(root_dir):
+            os.makedirs(root_dir)
 
-    def _load_checkpoints(self):
+    def resume(self):
         prefix_len = len(self.CKPT_PREFIX)
-        ckpt_dirs = os.listdir(self.root_dir)
+        ckpt_dirs = [path for path in os.listdir(self.root_dir) if path[:prefix_len] == self.CKPT_PREFIX]
         ckpt_dirs.sort(key=lambda ckpt_dir: int(ckpt_dir[prefix_len:]))
 
         self.checkpoints.extend(ckpt_dirs)
+
+        if not os.path.exists(os.path.join(self.root_dir, 'best_checkpoint.json')):
+            return
 
         with open(os.path.join(self.root_dir, 'best_checkpoint.json'), 'r') as fp:
             for k, v in json.load(fp).items():

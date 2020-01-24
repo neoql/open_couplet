@@ -30,7 +30,7 @@ class CNN(nn.Module):
                  kernel_size: int = 3, mid: bool = True, dropout_p: float = 0.0):
         super(CNN, self).__init__()
 
-        padding: Tuple[int, int] = (kernel_size // 2, (kernel_size - 1) // 2) if mid else (kernel_size, 0)
+        padding: Tuple[int, int] = (kernel_size // 2, (kernel_size - 1) // 2) if mid else (kernel_size-1, 0)
         self.dropout_p = dropout_p
         self.mid = mid
 
@@ -80,6 +80,7 @@ class Encoder(nn.Module):
         self.embedding: nn.Embedding = embedding
         self.hidden_size = hidden_size
         self.rnn_layers = rnn_layers
+        self.cnn_kernel_size = cnn_kernel_size
         self.dropout_p = dropout_p
 
         self.cnn = CNN(hidden_size, hidden_size, hidden_size, kernel_size=cnn_kernel_size, dropout_p=dropout_p)

@@ -45,10 +45,8 @@ class ParallelDataset(Dataset):
                 assert len(src_item) == len(tgt_item)
                 parallel_data.append((src_item, tgt_item))
 
-        print('before')
         if sort:
             parallel_data.sort(key=lambda x: len(x[0]), reverse=True)
-        print('after')
         return parallel_data
 
     # noinspection PyMethodMayBeStatic
