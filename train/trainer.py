@@ -2,6 +2,7 @@ import os
 import logging
 import itertools
 import json
+import shutil
 
 import torch
 import torch.nn as nn
@@ -67,10 +68,23 @@ class Seq2seqTrainer(object):
             trainer_states = latest_ckpt.trainer_states
 
             global_step = trainer_states['global_step']
-            tr_loss, logging_loss = trainer_states['tr_loss'], trainer_states['logging_loss']
-            tr_acc, logging_acc = trainer_states['tr_acc'], trainer_states['logging_acc']
+            tr_loss, logging_loss = trainer_states.get('tr_loss', 0.0), trainer_states.get('logging_loss', 0.0)
+            tr_acc, logging_acc = trainer_states.get('tr_acc', 0.0), trainer_states.get('logging_acc', 0.0)
 
-            optimizer = trainer_states['optimizer']
+            optimizer = Adam(model.parameters(), lr=learning_rate)
+
+            try:
+                optimizer.load_state_dict(trainer_states['optimizer_states'])
+
+                # https://github.com/pytorch/pytorch/issues/2830
+                if use_cuda:
+                    # noinspection PyUnresolvedReferences
+                    for state in optimizer.state.values():
+                        for k, v in state.items():
+                            if isinstance(v, torch.Tensor):
+                                state[k] = v.cuda()
+            except KeyError:
+                pass
         else:
             global_step = 0
             tr_loss, logging_loss = 0.0, 0.0
@@ -82,23 +96,25 @@ class Seq2seqTrainer(object):
             model = model.cuda()
             loss_fn = loss_fn.cuda()
 
-        steps_per_epoch = len(self.train_set)
+        sampler = RandomBatchSampler(self.train_set, batch_size=batch_size)
+        steps_per_epoch = sampler.num_batches
 
         attempt_times = 0
         early_stop_flag = False
 
         for epoch in range(num_epochs):
-            if resume and global_step//steps_per_epoch < epoch:
+            if resume and epoch < global_step//steps_per_epoch:
                 continue
 
-            sampler = RandomBatchSampler(self.train_set, batch_size=batch_size)
             train_dl = DataLoader(self.train_set, batch_sampler=sampler, collate_fn=collect_wrapper)
             batch_iter = tqdm(enumerate(train_dl), total=len(train_dl), desc=f'Epoch-{epoch+1}', unit=' step')
+            pbar = batch_iter
 
             if resume:
-                batch_iter = itertools.dropwhile(lambda n, _: n == global_step % steps_per_epoch, batch_iter)
+                batch_iter = itertools.dropwhile(lambda x: x[0] < global_step % steps_per_epoch, batch_iter)
 
             for step, batch in batch_iter:
+                model.train()
                 if use_cuda:
                     batch = tuple(t.cuda() for t in batch)
 
@@ -115,27 +131,29 @@ class Seq2seqTrainer(object):
                 loss_val = loss.item()
                 acc = self.compute_accuracy(log_prob.detach(), y.detach()).item()
 
-                batch_iter.set_postfix({'Loss': loss_val, 'Accuracy': acc})
+                pbar.set_postfix({'Loss': loss_val, 'Accuracy': acc})
 
                 tr_loss = tr_loss + loss_val
-                tr_acc = tr_loss + acc
+                tr_acc = tr_acc + acc
 
-                if global_step % self.logging_every == 0:
+                if (global_step + 1) % self.logging_every == 0:
                     tb_writer.add_scalar("train/Loss", (tr_loss - logging_loss)/self.logging_every, global_step)
                     tb_writer.add_scalar("train/Accuracy", (tr_acc - logging_acc)/self.logging_every, global_step)
 
                     logging_loss, logging_acc = tr_loss, tr_acc
 
-                if global_step % self.save_eval_every == 0:
+                if (global_step + 1) % self.save_eval_every == 0:
                     states = self.evaluate(model, loss_fn, self.dev_set)
-                    batch_iter.write(f'Step-{global_step} evaluate result: f{states}')
+                    pbar.write(f'Step-{global_step} evaluate result: {states}')
 
                     tb_writer.add_scalar("eval/Loss", states['dev_loss'], global_step)
                     tb_writer.add_scalar('eval/Accuracy', states['dev_acc'], global_step)
 
                     states.update({
                         'loss': loss_val,
-                        'accuracy': acc
+                        'accuracy': acc,
+                        'dev_loss': states['dev_loss'],
+                        'dev_acc': states['dev_acc']
                     })
 
                     min_dev_loss = self.ckpt_manager.min_dev_loss
@@ -147,6 +165,7 @@ class Seq2seqTrainer(object):
                         attempt_times = 0
 
                     if attempt_times > max_attempt_times:
+                        early_stop = True
                         break
 
                 global_step += 1
@@ -180,6 +199,7 @@ class Seq2seqTrainer(object):
 
     @torch.no_grad()
     def evaluate(self, model, loss_fn, dev_set, use_cuda=True):
+        model.eval()
         collect_wrapper = Seq2seqCollectWrapper(self.tokenizer, enforce_sorted=True)
         sampler = RandomBatchSampler(dev_set, batch_size=128)
         dev_dl = DataLoader(dev_set, collate_fn=collect_wrapper, batch_sampler=sampler)
@@ -192,8 +212,9 @@ class Seq2seqTrainer(object):
 
             x1, x2, y, x1_len = batch
 
-            log_prob, _, attn_weights = model(x1, x2, x1_len, enforce_sorted=True)
-            loss = loss_fn(log_prob, y)
+            result = model(x1, x2, x1_len, enforce_sorted=True)
+            log_prob, attn_weights = result
+            loss = loss_fn(log_prob.flatten(0, 1), y.flatten(0, 1))
             acc = self.compute_accuracy(log_prob, y)
 
             tr_loss += loss.item()
@@ -264,15 +285,15 @@ class CheckpointManager(object):
 
     def get_latest_checkpoint(self):
         ckpt_dir = self.checkpoints[-1]
-        return ckpt_dir, Checkpoint.load(ckpt_dir, self.model_class)
+        return ckpt_dir, Checkpoint.load(os.path.join(self.root_dir, ckpt_dir), self.model_class)
 
     def get_best_checkpoint(self):
         ckpt_dir = self.min_dev_loss_ckpt
-        return ckpt_dir, Checkpoint.load(ckpt_dir, self.model_class)
+        return ckpt_dir, Checkpoint.load(os.path.join(self.root_dir, ckpt_dir), self.model_class)
 
     def add_checkpoint(self, model, optimizer, states, global_step):
         trainer_states = {
-            'optimizer': optimizer,
+            'optimizer_states': optimizer.state_dict(),
             'global_step': global_step,
         }
 
@@ -285,18 +306,18 @@ class CheckpointManager(object):
         if len(self.checkpoints) == self.max_ckpt_num:
             rm_ckpt_dir = self.checkpoints.popleft()
             if rm_ckpt_dir != self.min_dev_loss_ckpt:
-                os.rmdir(rm_ckpt_dir)
+                shutil.rmtree(os.path.join(self.root_dir, rm_ckpt_dir))
         self.checkpoints.append(ckpt_dir)
 
         if states['dev_loss'] <= self.min_dev_loss:
             self.min_dev_loss = states['dev_loss']
-            if self.min_dev_loss_ckpt not in self.checkpoints:
-                os.rmdir(self.min_dev_loss_ckpt)
+            if self.min_dev_loss_ckpt is not None and self.min_dev_loss_ckpt not in self.checkpoints:
+                shutil.rmtree(os.path.join(self.root_dir, self.min_dev_loss_ckpt))
             self.min_dev_loss_ckpt = ckpt_dir
             with open(os.path.join(self.root_dir, 'best_checkpoint.json'), 'w') as fp:
                 json.dump({
-                    'min_dev_loss', self.min_dev_loss,
-                    'min_dev_loss_ckpt', self.min_dev_loss_ckpt,
+                    'min_dev_loss': self.min_dev_loss,
+                    'min_dev_loss_ckpt': self.min_dev_loss_ckpt,
                 }, fp)
 
         return ckpt_dir, ckpt

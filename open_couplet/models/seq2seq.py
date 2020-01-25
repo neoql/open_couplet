@@ -287,3 +287,4 @@ class Seq2seqModel(nn.Module):
         config = Seq2seqConfig.from_config(os.path.join(dirname, 'config.json'))
         model = cls(config)
         model.load_state_dict(torch.load(os.path.join(dirname, 'model.bin'), map_location='cpu'))
+        return model
