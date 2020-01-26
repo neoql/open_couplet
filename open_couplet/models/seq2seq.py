@@ -3,6 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.init as I
 
 from typing import Optional, Tuple
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
@@ -37,6 +38,10 @@ class CNN(nn.Module):
         self.pad = nn.ConstantPad1d(padding, 0.0)
         self.conv_1 = nn.Conv1d(input_size, hidden_size, kernel_size=kernel_size, padding=0)
         self.conv_2 = nn.Conv1d(hidden_size, output_size, kernel_size=kernel_size, padding=0)
+
+    def reset_parameters(self):
+        self.conv_1.reset_parameters()
+        self.conv_2.reset_parameters()
 
     def forward(self, x: torch.Tensor,
                 mem: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
@@ -100,8 +105,19 @@ class Encoder(nn.Module):
 
         self.reset_parameters()
 
+    # noinspection DuplicatedCode
     def reset_parameters(self):
-        pass
+        self.cnn.reset_parameters()
+        # self.rnn.reset_parameters()
+        self.norm_1.reset_parameters()
+        self.norm_2.reset_parameters()
+        self.h_proj.reset_parameters()
+
+        for w_ih, w_hh, b_ih, b_hh in self.rnn.all_weights:
+            I.orthogonal_(w_ih)
+            I.orthogonal_(w_hh)
+            I.zeros_(b_ih)
+            I.zeros_(b_hh)
 
     def forward(self, source: torch.Tensor,
                 seq_len: torch.Tensor,
@@ -188,8 +204,22 @@ class Decoder(nn.Module):
 
         self.reset_parameters()
 
+    # noinspection DuplicatedCode
     def reset_parameters(self):
-        pass
+        self.cnn.reset_parameters()
+        # self.rnn.reset_parameters()
+        self.norm_1.reset_parameters()
+        self.norm_2.reset_parameters()
+        self.norm_3.reset_parameters()
+        self.q_proj.reset_parameters()
+        self.fc_1.reset_parameters()
+        self.fc_2.reset_parameters()
+
+        for w_ih, w_hh, b_ih, b_hh in self.rnn.all_weights:
+            I.orthogonal_(w_ih)
+            I.orthogonal_(w_hh)
+            I.zeros_(b_ih)
+            I.zeros_(b_hh)
 
     def forward(self,
                 input_seq: torch.Tensor,

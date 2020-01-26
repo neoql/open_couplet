@@ -3,7 +3,6 @@
 import argparse
 
 import torch
-import torch.jit as jit
 
 from open_couplet.config import Seq2seqConfig
 from open_couplet.tokenizer import Seq2seqTokenizer

@@ -165,12 +165,13 @@ class Seq2seqTrainer(object):
                         attempt_times = 0
 
                     if attempt_times > max_attempt_times:
-                        early_stop = True
+                        early_stop_flag = True
                         break
 
                 global_step += 1
+            pbar.close()
             if early_stop_flag:
-                self.logger.info('early stop!')
+                self.logger.info('\nearly stop!')
                 break
 
         best_ckpt_dir, best_ckpt = self.ckpt_manager.get_best_checkpoint()
@@ -187,7 +188,7 @@ class Seq2seqTrainer(object):
             'Loss': latest_ckpt.trainer_states['loss'],
             'Accuracy': latest_ckpt.trainer_states['accuracy'],
             'Dev Loss': latest_ckpt.trainer_states['dev_loss'],
-            'Dev Accuracy': latest_ckpt_dir.trainer_states['dev_acc']
+            'Dev Accuracy': latest_ckpt.trainer_states['dev_acc']
         }
         self.logger.info(f'Latest checkpoint "{latest_ckpt_dir}": {latest_states}')
 
@@ -271,8 +272,9 @@ class CheckpointManager(object):
 
     def resume(self):
         prefix_len = len(self.CKPT_PREFIX)
-        ckpt_dirs = [path for path in os.listdir(self.root_dir) if path[:prefix_len] == self.CKPT_PREFIX]
-        ckpt_dirs.sort(key=lambda ckpt_dir: int(ckpt_dir[prefix_len:]))
+        ckpt_dirs = [os.path.join(self.root_dir, path) for path in os.listdir(self.root_dir)
+                     if path[:prefix_len] == self.CKPT_PREFIX]
+        ckpt_dirs.sort(key=lambda ckpt_dir: int(os.path.split(ckpt_dir)[-1][prefix_len:]))
 
         self.checkpoints.extend(ckpt_dirs)
 
@@ -285,11 +287,11 @@ class CheckpointManager(object):
 
     def get_latest_checkpoint(self):
         ckpt_dir = self.checkpoints[-1]
-        return ckpt_dir, Checkpoint.load(os.path.join(self.root_dir, ckpt_dir), self.model_class)
+        return ckpt_dir, Checkpoint.load(ckpt_dir, self.model_class)
 
     def get_best_checkpoint(self):
         ckpt_dir = self.min_dev_loss_ckpt
-        return ckpt_dir, Checkpoint.load(os.path.join(self.root_dir, ckpt_dir), self.model_class)
+        return ckpt_dir, Checkpoint.load(ckpt_dir, self.model_class)
 
     def add_checkpoint(self, model, optimizer, states, global_step):
         trainer_states = {
@@ -305,14 +307,16 @@ class CheckpointManager(object):
 
         if len(self.checkpoints) == self.max_ckpt_num:
             rm_ckpt_dir = self.checkpoints.popleft()
-            if rm_ckpt_dir != self.min_dev_loss_ckpt:
-                shutil.rmtree(os.path.join(self.root_dir, rm_ckpt_dir))
+            if rm_ckpt_dir != self.min_dev_loss_ckpt and os.path.exists(rm_ckpt_dir):
+                shutil.rmtree(rm_ckpt_dir)
         self.checkpoints.append(ckpt_dir)
 
         if states['dev_loss'] <= self.min_dev_loss:
             self.min_dev_loss = states['dev_loss']
-            if self.min_dev_loss_ckpt is not None and self.min_dev_loss_ckpt not in self.checkpoints:
-                shutil.rmtree(os.path.join(self.root_dir, self.min_dev_loss_ckpt))
+            if self.min_dev_loss_ckpt is not None \
+                    and self.min_dev_loss_ckpt not in self.checkpoints\
+                    and os.path.exists(self.min_dev_loss_ckpt):
+                shutil.rmtree(self.min_dev_loss_ckpt)
             self.min_dev_loss_ckpt = ckpt_dir
             with open(os.path.join(self.root_dir, 'best_checkpoint.json'), 'w') as fp:
                 json.dump({
