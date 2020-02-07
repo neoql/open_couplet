@@ -7,7 +7,7 @@ from open_couplet.predictor import Seq2seqPredictor
 
 def main():
     tokenizer = Seq2seqTokenizer.from_vocab('experiment/vocab.txt')
-    model = Seq2seqModel.from_trained('experiment/checkpoints_new/checkpoint_19099')
+    model = Seq2seqModel.from_trained('experiment/checkpoints/checkpoint_17849')
 
     predictor = Seq2seqPredictor(model, tokenizer)
     predictor.eval()
@@ -16,7 +16,7 @@ def main():
         src = input("输入上联: ")
         src = [tokenizer.bos_token] + list(src) + [tokenizer.eos_token]
         src_t = torch.tensor(tokenizer.convert_tokens_to_ids(src)).unsqueeze(0)
-        tgt_t = predictor(src_t, torch.tensor([len(src)]), beam_size=256)[0].squeeze(0)[0]
+        tgt_t = predictor(src_t, torch.tensor([len(src)]), beam_size=10)[0].squeeze(0)[0]
         tgt = ''.join(tokenizer.convert_ids_to_tokens(tgt_t.tolist()))
         print(tgt)
 

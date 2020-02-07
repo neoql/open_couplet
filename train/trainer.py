@@ -16,6 +16,7 @@ from torch.optim import Adam
 
 from open_couplet.models.seq2seq import Seq2seqModel
 from open_couplet.tokenizer import Seq2seqTokenizer
+# from open_couplet.models.loss import LabelSmoothingLoss, Perplexity
 from train.data import RandomBatchSampler, Seq2seqCollectWrapper
 
 
@@ -44,6 +45,8 @@ class Seq2seqTrainer(object):
         self.logger = logger
         self.ckpt_manager = CheckpointManager(save_dir, max_ckpt_num, model_class=Seq2seqModel)
 
+        # self.compute_perplexity = Perplexity(ignore_index=self.tokenizer.pad_token_id)
+
     def train(self, model,
               learning_rate: float,
               num_epochs: int,
@@ -57,6 +60,12 @@ class Seq2seqTrainer(object):
         tb_writer = SummaryWriter(self.logging_dir)
 
         loss_fn = nn.NLLLoss(ignore_index=self.tokenizer.pad_token_id, reduction='mean')
+        # loss_fn = LabelSmoothingLoss(
+        #     n_classes=self.tokenizer.vocab_size,
+        #     epsilon=0.1,
+        #     ignore_index=self.tokenizer.pad_token_id,
+        #     reduction='mean'
+        # )
 
         collect_wrapper = Seq2seqCollectWrapper(self.tokenizer, enforce_sorted=True)
 
@@ -69,7 +78,8 @@ class Seq2seqTrainer(object):
 
             global_step = trainer_states['global_step']
             tr_loss, logging_loss = trainer_states.get('tr_loss', 0.0), trainer_states.get('logging_loss', 0.0)
-            tr_acc, logging_acc = trainer_states.get('tr_acc', 0.0), trainer_states.get('logging_acc', 0.0)
+            # tr_acc, logging_acc = trainer_states.get('tr_acc', 0.0), trainer_states.get('logging_acc', 0.0)
+            tr_pp, logging_pp = trainer_states.get('tr_pp', 0.0), trainer_states.get('logging_pp', 0.0)
 
             optimizer = Adam(model.parameters(), lr=learning_rate)
 
@@ -88,7 +98,8 @@ class Seq2seqTrainer(object):
         else:
             global_step = 0
             tr_loss, logging_loss = 0.0, 0.0
-            tr_acc, logging_acc = 0.0, 0.0
+            # tr_acc, logging_acc = 0.0, 0.0
+            tr_pp, logging_pp = 0.0, 0.0
 
             optimizer = Adam(model.parameters(), lr=learning_rate)
 
@@ -129,31 +140,44 @@ class Seq2seqTrainer(object):
                 model.zero_grad()
 
                 loss_val = loss.item()
-                acc = self.compute_accuracy(log_prob.detach(), y.detach()).item()
+                # acc = self.compute_accuracy(log_prob.detach(), y.detach()).item()
+                # pp = self.compute_perplexity(
+                #     log_prob.detach().flatten(0, 1), y.detach().flatten(0, 1)).item()
+                pp = torch.exp(loss.detach()).item()
 
-                pbar.set_postfix({'Loss': loss_val, 'Accuracy': acc})
+                pbar.set_postfix({
+                    'Loss': loss_val,
+                    # 'Accuracy': acc,
+                    'Perplexity': pp,
+                })
 
                 tr_loss = tr_loss + loss_val
-                tr_acc = tr_acc + acc
+                # tr_acc = tr_acc + acc
+                tr_pp = tr_pp + pp
 
                 if (global_step + 1) % self.logging_every == 0:
                     tb_writer.add_scalar("train/Loss", (tr_loss - logging_loss)/self.logging_every, global_step)
-                    tb_writer.add_scalar("train/Accuracy", (tr_acc - logging_acc)/self.logging_every, global_step)
+                    # tb_writer.add_scalar("train/Accuracy", (tr_acc - logging_acc)/self.logging_every, global_step)
+                    tb_writer.add_scalar('train/Perplexity', (tr_pp - logging_pp)/self.logging_every, global_step)
 
-                    logging_loss, logging_acc = tr_loss, tr_acc
+                    # logging_loss, logging_acc = tr_loss, tr_acc
+                    logging_loss, logging_pp = tr_loss, tr_pp
 
                 if (global_step + 1) % self.save_eval_every == 0:
                     states = self.evaluate(model, loss_fn, self.dev_set)
                     pbar.write(f'Step-{global_step} evaluate result: {states}')
 
                     tb_writer.add_scalar("eval/Loss", states['dev_loss'], global_step)
-                    tb_writer.add_scalar('eval/Accuracy', states['dev_acc'], global_step)
+                    # tb_writer.add_scalar('eval/Accuracy', states['dev_acc'], global_step)
+                    tb_writer.add_scalar('eval/Perplexity', states['dev_pp'], global_step)
 
                     states.update({
                         'loss': loss_val,
-                        'accuracy': acc,
+                        # 'accuracy': acc,
+                        'pp': pp,
                         'dev_loss': states['dev_loss'],
-                        'dev_acc': states['dev_acc']
+                        # 'dev_acc': states['dev_acc']
+                        'dev_pp': states['dev_pp'],
                     })
 
                     min_dev_loss = self.ckpt_manager.min_dev_loss
@@ -177,18 +201,22 @@ class Seq2seqTrainer(object):
         best_ckpt_dir, best_ckpt = self.ckpt_manager.get_best_checkpoint()
         best_states = {
             'Loss': best_ckpt.trainer_states['loss'],
-            'Accuracy': best_ckpt.trainer_states['accuracy'],
+            # 'Accuracy': best_ckpt.trainer_states['accuracy'],
+            'Perplexity': best_ckpt.trainer_states['pp'],
             'Dev Loss': best_ckpt.trainer_states['dev_loss'],
-            'Dev Accuracy': best_ckpt.trainer_states['dev_acc']
+            # 'Dev Accuracy': best_ckpt.trainer_states['dev_acc'],
+            'Dev Perplexity': best_ckpt.trainer_states['dev_pp']
         }
         self.logger.info(f'Best checkpoint "{best_ckpt_dir}": {best_states}')
 
         latest_ckpt_dir, latest_ckpt = self.ckpt_manager.get_latest_checkpoint()
         latest_states = {
             'Loss': latest_ckpt.trainer_states['loss'],
-            'Accuracy': latest_ckpt.trainer_states['accuracy'],
+            # 'Accuracy': latest_ckpt.trainer_states['accuracy'],
+            'Perplexity': latest_ckpt.trainer_states['pp'],
             'Dev Loss': latest_ckpt.trainer_states['dev_loss'],
-            'Dev Accuracy': latest_ckpt.trainer_states['dev_acc']
+            # 'Dev Accuracy': latest_ckpt.trainer_states['dev_acc'],
+            'Dev Perplexity': latest_ckpt.trainer_states['dev_pp']
         }
         self.logger.info(f'Latest checkpoint "{latest_ckpt_dir}": {latest_states}')
 
@@ -205,7 +233,8 @@ class Seq2seqTrainer(object):
         sampler = RandomBatchSampler(dev_set, batch_size=128)
         dev_dl = DataLoader(dev_set, collate_fn=collect_wrapper, batch_sampler=sampler)
 
-        tr_loss, tr_acc = 0.0, 0.0
+        # tr_loss, tr_acc = 0.0, 0.0
+        tr_loss, tr_pp = 0.0, 0.0
 
         for batch in dev_dl:
             if use_cuda:
@@ -216,12 +245,19 @@ class Seq2seqTrainer(object):
             result = model(x1, x2, x1_len, enforce_sorted=True)
             log_prob, attn_weights = result
             loss = loss_fn(log_prob.flatten(0, 1), y.flatten(0, 1))
-            acc = self.compute_accuracy(log_prob, y)
+            # acc = self.compute_accuracy(log_prob, y)
+            # pp = self.compute_perplexity(log_prob.flatten(0, 1), y.flatten(0, 1))
+            pp = torch.exp(loss)
 
             tr_loss += loss.item()
-            tr_acc += acc.item()
+            # tr_acc += acc.item()
+            tr_pp += pp.item()
 
-        return {'dev_loss': tr_loss/sampler.num_batches, 'dev_acc': tr_acc/sampler.num_batches}
+        return {
+            'dev_loss': tr_loss/sampler.num_batches,
+            # 'dev_acc': tr_acc/sampler.num_batches,
+            'dev_pp': tr_pp/sampler.num_batches
+        }
 
 
 class Checkpoint(object):

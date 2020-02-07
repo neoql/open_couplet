@@ -7,7 +7,6 @@ import torch.nn.init as I
 
 from typing import Optional, Tuple
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
-from open_couplet.models.attention import ScaledDotProductAttention
 from open_couplet.config import Seq2seqConfig
 
 
@@ -20,9 +19,23 @@ def gelu(x):
     return x * cdf
 
 
+def position_encoding(pos_seq: torch.Tensor,
+                      inv_freq: torch.Tensor,
+                      batch_size: int = 1):
+    # noinspection PyTypeChecker
+    sinusoid_inp = torch.einsum("i,d->id", pos_seq, inv_freq)
+    pos_emb = torch.cat([torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)], dim=-1)
+    pos_emb = pos_emb.unsqueeze(0)
+
+    if batch_size > 1:
+        pos_emb = pos_emb.expand(batch_size, -1, -1)
+
+    return pos_emb
+
+
 class CNN(nn.Module):
     """
-    CNN with separable convolution.
+    Convolution Neural Network.
     """
 
     __constants__ = ['dropout_p']
@@ -73,6 +86,83 @@ class CNN(nn.Module):
         y = self.conv_2(h)
 
         return y.transpose(-2, -1), (x[:, :, :ret_mem], h[:, :, -ret_mem:])
+
+
+class Attention(nn.Module):
+    __constants__ = ['hidden_size', 'clamp_len']
+
+    def __init__(self, hidden_size: int, clamp_len: int = -1):
+        super(Attention, self).__init__()
+
+        self.hidden_size = hidden_size
+        self.clamp_len = clamp_len
+
+        self.content_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.position_proj = nn.Linear(hidden_size, hidden_size)
+
+    def forward(self,
+                query: torch.Tensor,
+                key_val: torch.Tensor,
+                mask: Optional[torch.Tensor]):
+        """
+        :param query: (batch_size, q_len, hidden_size)
+        :param key_val: (batch_size, kv_len, hidden_size)
+        :param mask: attention mask
+        :return:
+            output: (batch_size, q_len, hidden_size)
+            weights: (batch_size, q_len, kv_len)
+        """
+        # qh, qr: (batch_size, q_len, hidden_size)
+        qh = self.content_proj(query)
+        qr = self.position_proj(query)
+
+        # kh, v: (batch_size, kv_len, hidden_size)
+        # kr: (batch_size, r_len, hidden_size)
+        kh, v = key_val, key_val
+        kr = self.relative_position_encoding(
+            query.size(0), query.size(1), key_val.size(1)).to(query.device)
+
+        # content_scores, position_scores: (batch_size, q_len, kv_len)
+        content_scores = torch.matmul(qh, kh.transpose(-2, -1)) / math.sqrt(self.hidden_size)
+        position_scores = torch.matmul(qr, kr.transpose(-2, -1)) / math.sqrt(self.hidden_size)
+        position_scores = self.rel_shift(position_scores, klen=key_val.size(1))
+
+        scores = content_scores + position_scores
+
+        if mask is not None:
+            scores = scores.masked_fill(mask, float('-inf'))
+
+        weights = F.softmax(scores, -1)
+        return torch.matmul(weights, v), weights
+
+    def relative_position_encoding(self, batch_size, q_len, kv_len):
+        freq_seq = torch.arange(0, self.hidden_size, 2.0, dtype=torch.float)
+        # noinspection PyTypeChecker
+        inv_freq: torch.Tensor = 1.0 / torch.pow(10000, (freq_seq / self.hidden_size))
+
+        begin, end = kv_len, -q_len
+
+        pos_seq = torch.arange(begin, end, -1.0)
+
+        if self.clamp_len > 0:
+            pos_seq = pos_seq.clamp(-self.clamp_len, self.clamp_len)
+        pos_encoding = position_encoding(pos_seq, inv_freq, batch_size)
+
+        return pos_encoding
+
+    # noinspection PyMethodMayBeStatic
+    def rel_shift(self, x: torch.Tensor, klen: int):
+        """
+        :param x: (batch_size, q_len, r_len)
+        :param klen: scalar
+        :return: (batch_size, q_len, klen)
+        """
+        x_size = x.size()
+        x = x.reshape(x_size[0], x_size[2], x_size[1])
+        x = x[:, 1:, :]
+        x = x.reshape(x_size[0], x_size[1], x_size[2] - 1)
+
+        return x.index_select(2, torch.arange(klen, device=x.device, dtype=torch.long))
 
 
 # noinspection PyMethodMayBeStatic
@@ -196,8 +286,7 @@ class Decoder(nn.Module):
         self.norm_2 = nn.LayerNorm(hidden_size)
         self.norm_3 = nn.LayerNorm(hidden_size)
 
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.attention = ScaledDotProductAttention()
+        self.attention = Attention(hidden_size=hidden_size)
 
         self.fc_1 = nn.Linear(hidden_size, hidden_size)
         self.fc_2 = nn.Linear(hidden_size, embedding.num_embeddings)
@@ -211,7 +300,6 @@ class Decoder(nn.Module):
         self.norm_1.reset_parameters()
         self.norm_2.reset_parameters()
         self.norm_3.reset_parameters()
-        self.q_proj.reset_parameters()
         self.fc_1.reset_parameters()
         self.fc_2.reset_parameters()
 
@@ -265,7 +353,7 @@ class Decoder(nn.Module):
                 rnn_out = F.dropout(rnn_out, p=self.dropout_p, training=self.training)
             rnn_out = self.norm_2(cnn_out[:, i, :].unsqueeze(1) + rnn_out)
 
-            attn_out, attn_w = self.attention(q=self.q_proj(rnn_out), k=context, v=context, mask=attention_mask)
+            attn_out, attn_w = self.attention(query=rnn_out, key_val=context, mask=attention_mask)
             attn_out = self.norm_3(attn_out + rnn_out)
 
             out = gelu(self.fc_1(attn_out))
