@@ -83,7 +83,7 @@ class CNN(nn.Module):
         else:
             h = self.pad(h)
 
-        y = self.conv_2(h)
+        y = gelu(self.conv_2(h))
 
         return y.transpose(-2, -1), (x[:, :, :ret_mem], h[:, :, -ret_mem:])
 
@@ -246,7 +246,7 @@ class Encoder(nn.Module):
         context = pad_packed_sequence(context, batch_first=True)[0].view(batch_size, src_len, 2, -1)
         if self.dropout_p:
             context = F.dropout(context, p=self.dropout_p, training=self.training)
-        context = self.norm_2(context[:, :, 0] + context[:, :, 1] + cnn_out)
+        context = self.norm_2(context[:, :, 0] + context[:, :, 1])
 
         # cat directions
         state = torch.tanh(self.h_proj(self._cat_directions(state)))
@@ -349,11 +349,13 @@ class Decoder(nn.Module):
             input_step = torch.cat([cnn_out[:, i, :], fh], dim=-1).unsqueeze(1)
 
             rnn_out, state = self.rnn(input_step, state)
+            rnn_out = self.norm_2(rnn_out)
             if self.dropout_p:
                 rnn_out = F.dropout(rnn_out, p=self.dropout_p, training=self.training)
-            rnn_out = self.norm_2(cnn_out[:, i, :].unsqueeze(1) + rnn_out)
 
             attn_out, attn_w = self.attention(query=rnn_out, key_val=context, mask=attention_mask)
+            if self.dropout_p:
+                attn_out = F.dropout(attn_out, p=self.dropout_p, training=self.training)
             attn_out = self.norm_3(attn_out + rnn_out)
 
             out = gelu(self.fc_1(attn_out))
