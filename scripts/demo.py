@@ -7,7 +7,7 @@ from open_couplet.predictor import Seq2seqPredictor
 
 def main():
     tokenizer = Seq2seqTokenizer.from_vocab('experiment/vocab.txt')
-    model = Seq2seqModel.from_trained('experiment/checkpoints/checkpoint_17849')
+    model = Seq2seqModel.from_trained('experiment/checkpoints/best_ckpt')
 
     predictor = Seq2seqPredictor(model, tokenizer)
     predictor.eval()

@@ -76,7 +76,7 @@ class Seq2seqTrainer(object):
             model = latest_ckpt.model
             trainer_states = latest_ckpt.trainer_states
 
-            global_step = trainer_states['global_step']
+            global_step = trainer_states['global_step'] + 1
             tr_loss, logging_loss = trainer_states.get('tr_loss', 0.0), trainer_states.get('logging_loss', 0.0)
             # tr_acc, logging_acc = trainer_states.get('tr_acc', 0.0), trainer_states.get('logging_acc', 0.0)
             tr_pp, logging_pp = trainer_states.get('tr_pp', 0.0), trainer_states.get('logging_pp', 0.0)
@@ -178,6 +178,10 @@ class Seq2seqTrainer(object):
                         'dev_loss': states['dev_loss'],
                         # 'dev_acc': states['dev_acc']
                         'dev_pp': states['dev_pp'],
+                        'tr_loss': tr_loss,
+                        'logging_loss': logging_loss,
+                        'tr_pp': tr_pp,
+                        'logging_pp': logging_pp,
                     })
 
                     min_dev_loss = self.ckpt_manager.min_dev_loss

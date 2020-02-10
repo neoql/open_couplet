@@ -135,12 +135,53 @@ class Attention(nn.Module):
         weights = F.softmax(scores, -1)
         return torch.matmul(weights, v), weights
 
-    def relative_position_encoding(self, batch_size, q_len, kv_len):
+    def fwd_step(self,
+                 query: torch.Tensor,
+                 key_val: torch.Tensor,
+                 shift: int,
+                 mask: Optional[torch.Tensor]):
+        # qh, qr: (batch_size, q_len, hidden_size)
+        qh = self.content_proj(query)
+        qr = self.position_proj(query)
+
+        # kh, v: (batch_size, kv_len, hidden_size)
+        # kr: (batch_size, r_len, hidden_size)
+        kh, v = key_val, key_val
+        kr = self.step_rel_pos_encoding(key_val.size(0), key_val.size(1), shift).to(query.device)
+
+        # content_scores, position_scores: (batch_size, q_len, kv_len)
+        content_scores = torch.matmul(qh, kh.transpose(-2, -1)) / math.sqrt(self.hidden_size)
+        position_scores = torch.matmul(qr, kr.transpose(-2, -1)) / math.sqrt(self.hidden_size)
+
+        scores = content_scores + position_scores
+
+        if mask is not None:
+            scores = scores.masked_fill(mask, float('-inf'))
+
+        weights = F.softmax(scores, -1)
+        return torch.matmul(weights, v), weights
+
+    def relative_position_encoding(self, batch_size: int, q_len: int, kv_len: int):
         freq_seq = torch.arange(0, self.hidden_size, 2.0, dtype=torch.float)
         # noinspection PyTypeChecker
         inv_freq: torch.Tensor = 1.0 / torch.pow(10000, (freq_seq / self.hidden_size))
 
         begin, end = kv_len, -q_len
+
+        pos_seq = torch.arange(begin, end, -1.0)
+
+        if self.clamp_len > 0:
+            pos_seq = pos_seq.clamp(-self.clamp_len, self.clamp_len)
+        pos_encoding = position_encoding(pos_seq, inv_freq, batch_size)
+
+        return pos_encoding
+
+    def step_rel_pos_encoding(self, batch_size: int, kv_len: int, shift: int):
+        freq_seq = torch.arange(0, self.hidden_size, 2.0, dtype=torch.float)
+        # noinspection PyTypeChecker
+        inv_freq: torch.Tensor = 1.0 / torch.pow(10000, (freq_seq / self.hidden_size))
+
+        begin, end = 1 + shift, 1 - kv_len + shift
 
         pos_seq = torch.arange(begin, end, -1.0)
 
@@ -315,7 +356,8 @@ class Decoder(nn.Module):
                 state: torch.Tensor,
                 fh: Optional[torch.Tensor] = None,
                 attention_mask: Optional[torch.Tensor] = None,
-                cnn_mem: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
+                cnn_mem: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                offset: int = 0):
         """
         :param input_seq: (batch, tgt_len)
         :param context: (layers, batch, hidden_size)
@@ -323,6 +365,7 @@ class Decoder(nn.Module):
         :param fh: (batch_size, hidden_size)
         :param attention_mask: (batch_size, src_fix_len)
         :param cnn_mem: (batch_size, hidden_size, mem_len)
+                :param offset:
         :return:
         """
         batch_size, tgt_len = input_seq.size()
@@ -353,7 +396,10 @@ class Decoder(nn.Module):
             if self.dropout_p:
                 rnn_out = F.dropout(rnn_out, p=self.dropout_p, training=self.training)
 
-            attn_out, attn_w = self.attention(query=rnn_out, key_val=context, mask=attention_mask)
+            # attn_out, attn_w = self.attention(query=rnn_out, key_val=context, mask=attention_mask)
+            attn_out, attn_w = self.attention.fwd_step(
+                query=rnn_out, key_val=context, shift=offset + i, mask=attention_mask,
+            )
             if self.dropout_p:
                 attn_out = F.dropout(attn_out, p=self.dropout_p, training=self.training)
             attn_out = self.norm_3(attn_out + rnn_out)

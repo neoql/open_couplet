@@ -86,7 +86,7 @@ class Seq2seqPredictor(nn.Module):
 
         for i in range(fix_len_less_one):
             log_prob, (state, fh, cnn_mem), attn_weights = self.decode(
-                input_var, context, state, fh, attention_mask, cnn_mem
+                input_var, context, state, fh, attention_mask, cnn_mem, offset=i,
             )
 
             # update scores
