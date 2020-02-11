@@ -16,7 +16,7 @@ from torch.optim import Adam
 
 from open_couplet.models.seq2seq import Seq2seqModel
 from open_couplet.tokenizer import Seq2seqTokenizer
-# from open_couplet.models.loss import LabelSmoothingLoss, Perplexity
+from open_couplet.models.loss import Perplexity
 from train.data import RandomBatchSampler, Seq2seqCollectWrapper
 
 
@@ -45,7 +45,7 @@ class Seq2seqTrainer(object):
         self.logger = logger
         self.ckpt_manager = CheckpointManager(save_dir, max_ckpt_num, model_class=Seq2seqModel)
 
-        # self.compute_perplexity = Perplexity(ignore_index=self.tokenizer.pad_token_id)
+        self.compute_perplexity = Perplexity(ignore_index=self.tokenizer.pad_token_id)
 
     def train(self, model,
               learning_rate: float,
@@ -59,7 +59,7 @@ class Seq2seqTrainer(object):
 
         tb_writer = SummaryWriter(self.logging_dir)
 
-        loss_fn = nn.NLLLoss(ignore_index=self.tokenizer.pad_token_id, reduction='mean')
+        loss_fn = nn.NLLLoss(ignore_index=self.tokenizer.pad_token_id, reduction='sum')
         # loss_fn = LabelSmoothingLoss(
         #     n_classes=self.tokenizer.vocab_size,
         #     epsilon=0.1,
@@ -132,7 +132,7 @@ class Seq2seqTrainer(object):
                 x1, x2, y, x1_len = batch
 
                 log_prob, attn_weights = model(x1, x2, x1_len, enforce_sorted=True)
-                loss = loss_fn(log_prob.flatten(0, 1), y.flatten(0, 1))
+                loss = loss_fn(log_prob.flatten(0, 1), y.flatten(0, 1)) / batch_size
 
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -141,9 +141,9 @@ class Seq2seqTrainer(object):
 
                 loss_val = loss.item()
                 # acc = self.compute_accuracy(log_prob.detach(), y.detach()).item()
-                # pp = self.compute_perplexity(
-                #     log_prob.detach().flatten(0, 1), y.detach().flatten(0, 1)).item()
-                pp = torch.exp(loss.detach()).item()
+                pp = self.compute_perplexity(
+                    log_prob.detach().flatten(0, 1), y.detach().flatten(0, 1)).item()
+                # pp = torch.exp(loss.detach()).item()
 
                 pbar.set_postfix({
                     'Loss': loss_val,
@@ -248,10 +248,10 @@ class Seq2seqTrainer(object):
 
             result = model(x1, x2, x1_len, enforce_sorted=True)
             log_prob, attn_weights = result
-            loss = loss_fn(log_prob.flatten(0, 1), y.flatten(0, 1))
+            loss = loss_fn(log_prob.flatten(0, 1), y.flatten(0, 1))/sampler.batch_size
             # acc = self.compute_accuracy(log_prob, y)
-            # pp = self.compute_perplexity(log_prob.flatten(0, 1), y.flatten(0, 1))
-            pp = torch.exp(loss)
+            pp = self.compute_perplexity(log_prob.flatten(0, 1), y.flatten(0, 1))
+            # pp = torch.exp(loss)
 
             tr_loss += loss.item()
             # tr_acc += acc.item()
