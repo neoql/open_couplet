@@ -1,5 +1,4 @@
 import torch
-import torch.jit as jit
 
 from math import inf
 
@@ -98,7 +97,6 @@ class TestSeq2seqPredictor(object):
     def test_predict_prob(self):
         self.model.eval()
         test_predictor = GoldenSeq2seqPredictor(self.model, self.predictor.vocab_size, self.tokenizer)
-        jit_predictor = jit.script(self.predictor)
 
         sentence, length = sample_case1()
         eps = 1e-5
@@ -115,25 +113,10 @@ class TestSeq2seqPredictor(object):
         assert torch.equal(output, golden_output)
         assert torch.equal(utils.sentence_pattern(output[:, 0, :], pad_mask=pad_mask), golden_pattern)
 
-        with torch.no_grad():
-            output, scores = jit_predictor(sentence, length, beam_size=1)
-
-        assert torch.norm(scores - golden_scores) < eps
-        assert torch.equal(output, golden_output)
-        assert torch.equal(utils.sentence_pattern(output[:, 0, :], pad_mask=pad_mask), golden_pattern)
-
         golden_output, golden_scores = test_predictor.predict_prob(sentence, length, beam_size=3)
 
         with torch.no_grad():
             output, scores = self.predictor(sentence, length, beam_size=3)
-
-        assert torch.norm(scores - golden_scores, p=inf) < eps
-        assert torch.equal(output, golden_output)
-        for i in range(3):
-            assert torch.equal(utils.sentence_pattern(output[:, i, :], pad_mask=pad_mask), golden_pattern)
-
-        with torch.no_grad():
-            output, scores = jit_predictor(sentence, length, beam_size=3)
 
         assert torch.norm(scores - golden_scores, p=inf) < eps
         assert torch.equal(output, golden_output)
@@ -256,7 +239,7 @@ class GoldenSeq2seqPredictor(object):
         input_var = torch.full([beam_size, 1], self.sos).long()
         for i in range(tgt_len):
             log_prob, (state, fh, cnn_mem), attn_weights = self.decoder(
-                input_var, context, state, fh, attention_mask.unsqueeze(1), cnn_mem
+                input_var, context, state, fh, attention_mask.unsqueeze(1), cnn_mem, offset=i
             )
 
             # scores: (beam_size, vocab_size)

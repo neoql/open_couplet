@@ -25,7 +25,10 @@ class Seq2seqPredictor(nn.Module):
         self.bos_token_id = tokenizer.bos_token_id
         self.eos_token_id = tokenizer.eos_token_id
 
-    def forward(self, source: torch.Tensor, src_len: torch.Tensor, beam_size: int = 1):
+    def forward(self, source: torch.Tensor,
+                src_len: torch.Tensor,
+                beam_size: int = 1,
+                enforce_sorted: bool = False):
         assert beam_size > 0
         k = beam_size
 
@@ -72,7 +75,9 @@ class Seq2seqPredictor(nn.Module):
         # encode source
         # context: (batch_size, fix_len, hidden_size)
         # state: (layers, batch_size, hidden_size)
-        context, state = self.encode(source, src_len, mask=source.eq(self.pad_token_id).unsqueeze(1))
+        context, state = self.encode(source, src_len,
+                                     mask=source.eq(self.pad_token_id,).unsqueeze(1),
+                                     enforce_sorted=enforce_sorted)
 
         context = torch.stack([context] * k, dim=1).flatten(0, 1)
         state = torch.stack([state] * k, dim=2).flatten(1, 2)
