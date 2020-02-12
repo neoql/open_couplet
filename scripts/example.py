@@ -16,7 +16,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    bot = CoupletBot(args.model)
+    bot = CoupletBot.load(args.model)
 
     while True:
         up_part = input("输入上联：")

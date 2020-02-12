@@ -1,7 +1,8 @@
 import os
+import re
 import torch
 
-from typing import Union, Iterable, Optional
+from typing import Union, Iterable, Optional, Tuple
 from open_couplet.tokenizer import Seq2seqTokenizer
 from open_couplet.models.seq2seq import Seq2seqModel
 from open_couplet.predictor import Seq2seqPredictor
@@ -12,20 +13,20 @@ class CoupletBot(object):
     VOCAB_FILE_NAME = 'vocab.txt'
     MAX_LEN = 30
 
-    def __init__(self, model_dir: str, *, vocab_file: Optional[str] = None):
-        self.model_dir = model_dir
-        self.vocab_file = os.path.join(self.model_dir, self.VOCAB_FILE_NAME) \
-            if vocab_file is None else vocab_file
-
-        self._reset_tokenizer()
-        self._reset_model()
+    def __init__(self, model: Seq2seqModel, tokenizer: Seq2seqTokenizer):
+        self._model = model
+        self._tokenizer = tokenizer
         self._reset_predictor()
 
-    def _reset_tokenizer(self):
-        self._tokenizer = Seq2seqTokenizer.from_vocab(self.vocab_file)
+    @classmethod
+    def load(cls, model_dir: str, *, vocab_file: Optional[str] = None):
+        vocab_file = os.path.join(model_dir, cls.VOCAB_FILE_NAME) \
+            if vocab_file is None else vocab_file
 
-    def _reset_model(self):
-        self._model = Seq2seqModel.from_trained(self.model_dir)
+        model = Seq2seqModel.from_trained(model_dir)
+        tokenizer = Seq2seqTokenizer.from_vocab(vocab_file)
+
+        return cls(model, tokenizer)
 
     def _reset_predictor(self):
         self._predictor = Seq2seqPredictor(self._model, self._tokenizer)
@@ -62,7 +63,9 @@ class CoupletBot(object):
 
         return down_part
 
-    def tokenize(self, up_part: Iterable[str], enforce_cleaned: bool = False):
+    def tokenize(self,
+                 up_part: Iterable[str],
+                 enforce_cleaned: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         tokenizer = self._tokenizer
 
         inputs = []
@@ -83,4 +86,6 @@ class CoupletBot(object):
 
     @staticmethod
     def cleaning_inputs(inputs):
+        # delete all english characters, numbers and blank characters
+        inputs = re.sub(r'[A-Za-z0-9\s+]', '', inputs)
         return utils.replace_en_punctuation(inputs)

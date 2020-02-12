@@ -7,7 +7,7 @@ class Seq2seqConfig(object):
         self.hidden_size = cfg.get('hidden_size', 700)
         self.rnn_layers = cfg.get('rnn_layers', 2)
         self.cnn_kernel_size = cfg.get('cnn_kernel_size', 3)
-        self.dropout_p = cfg.get('dropout_p', 0.7)
+        self.dropout_p = cfg.get('dropout_p', 0.1)
 
     @classmethod
     def from_config(cls, filename):
