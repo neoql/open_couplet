@@ -2,3 +2,6 @@
 dataset
 experiment
 **/__pycache__
+dist
+/open_couplet.egg-info/
+/build/
