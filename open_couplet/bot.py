@@ -1,8 +1,8 @@
-import os
 import re
+import os
 import torch
 
-from typing import Union, Iterable, Optional, Tuple
+from typing import Union, Sequence, Optional, Tuple
 from open_couplet.tokenizer import Seq2seqTokenizer
 from open_couplet.models.seq2seq import Seq2seqModel
 from open_couplet.predictor import Seq2seqPredictor
@@ -32,7 +32,7 @@ class CoupletBot(object):
         self._predictor = Seq2seqPredictor(self._model, self._tokenizer)
         self._predictor.eval()
 
-    def reply(self, up_part: Union[str, Iterable[str]],
+    def reply(self, up_part: Union[str, Sequence[str]],
               beam_size: int = 16,
               topk: int = 1,
               enforce_cleaned: bool = False):
@@ -64,22 +64,29 @@ class CoupletBot(object):
         return down_part
 
     def tokenize(self,
-                 up_part: Iterable[str],
+                 up_part: Sequence[str],
                  enforce_cleaned: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         tokenizer = self._tokenizer
 
         inputs = []
         length = []
 
-        for s in up_part:
-            s = s if enforce_cleaned else self.cleaning_inputs(s)
-            s = [tokenizer.bos_token] + list(s) + [tokenizer.eos_token]
-            l = len(s)
-            inputs.append(tokenizer.convert_tokens_to_ids(
-                s + [tokenizer.pad_token] * (self.MAX_LEN - l)))
-            length.append(l)
+        fix_len = self.MAX_LEN + 2 if len(up_part) > 1 else len(up_part[0])
+        max_len = -1
 
-        x1 = torch.tensor(inputs)[:, :max(length)]
+        for s in up_part:
+            cleaned_str = s if enforce_cleaned else self.cleaning_inputs(s)
+            cleaned_str = [tokenizer.bos_token] + list(cleaned_str) + [tokenizer.eos_token]
+            l = len(cleaned_str)
+            if l > self.MAX_LEN + 2:
+                raise ValueError(f'"{s}" is too long. '
+                                 f'Length of up-part should be shorter than {self.MAX_LEN}')
+            inputs.append(tokenizer.convert_tokens_to_ids(
+                cleaned_str + [tokenizer.pad_token] * (fix_len - l)))
+            length.append(l)
+            max_len = l if l > max_len else max_len
+
+        x1 = torch.tensor(inputs)[:, :max_len]
         length = torch.tensor(length)
 
         return x1, length
