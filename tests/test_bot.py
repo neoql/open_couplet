@@ -58,20 +58,20 @@ def test_tokenize():
 
     bot = CoupletBot(model, tokenizer)
 
-    out, length = bot.tokenize(up_part_case1)
+    out, length = bot.prepare_input_tensors(up_part_case1)
     assert length.squeeze(0).equal(torch.tensor(len(up_part_case1[0]) + 2))
     assert out.size() == (1, len(up_part_case1[0]) + 2)
 
     assert tokenizer.convert_ids_to_tokens(out[0].tolist()) \
            == [tokenizer.bos_token] + list(up_part_case1[0]) + [tokenizer.eos_token]
 
-    out, length = bot.tokenize(up_part_case2)
+    out, length = bot.prepare_input_tensors(up_part_case2)
     assert length.equal(torch.tensor([len(s)+2 for s in up_part_case2]))
     for i in range(3):
         assert tokenizer.convert_ids_to_tokens(out[i].tolist()) \
                == [tokenizer.bos_token] + list(up_part_case2[i]) + [tokenizer.eos_token]
 
-    out, length = bot.tokenize(up_part_case3)
+    out, length = bot.prepare_input_tensors(up_part_case3)
     assert length.equal(torch.tensor([len(s) + 2 for s in up_part_case3]))
     for i in range(3):
         assert tokenizer.convert_ids_to_tokens(out[i].tolist()) \

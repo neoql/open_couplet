@@ -8,6 +8,8 @@ from open_couplet.models.seq2seq import Seq2seqModel
 from open_couplet.predictor import Seq2seqPredictor
 from open_couplet import utils
 
+_invalid_token_regex = re.compile(r"[\-.!@#$%\\^&*)(+={}\[\]/\",'<>~·`?:;|。“”‘（）《》〈〉【】『』「」﹃﹄〔〕…—～﹏￥A-Za-z0-9\s]+")
+
 
 class CoupletBot(object):
     VOCAB_FILE_NAME = 'vocab.txt'
@@ -40,7 +42,7 @@ class CoupletBot(object):
         up_part = [up_part] if single_flag else up_part
         assert 0 < topk <= beam_size
 
-        x1, length = self.tokenize(up_part, enforce_cleaned)
+        x1, length = self.prepare_input_tensors(up_part, enforce_cleaned)
 
         predict = self._predictor
         tokenizer = self._tokenizer
@@ -63,9 +65,9 @@ class CoupletBot(object):
 
         return down_part
 
-    def tokenize(self,
-                 up_part: Sequence[str],
-                 enforce_cleaned: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+    def prepare_input_tensors(self,
+                              up_part: Sequence[str],
+                              enforce_cleaned: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         tokenizer = self._tokenizer
 
         inputs = []
@@ -93,6 +95,5 @@ class CoupletBot(object):
 
     @staticmethod
     def cleaning_inputs(inputs):
-        # delete all english characters, numbers and blank characters
-        inputs = re.sub(r'[A-Za-z0-9\s+]', '', inputs)
+        inputs = _invalid_token_regex.sub('', inputs)
         return utils.replace_en_punctuation(inputs)

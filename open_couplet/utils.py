@@ -38,7 +38,7 @@ def sentence_pattern(sent: torch.Tensor, pad_mask: Optional[torch.Tensor] = None
     return pattern
 
 
-_quotes_block_regex = re.compile(r'".*?"')
+_quotes_block_regex = re.compile(r"['\"].*?['\"]")
 
 
 def replace_en_punctuation(string: str) -> str:
@@ -63,8 +63,7 @@ def replace_en_punctuation(string: str) -> str:
     li = list(string)
 
     for i, c in enumerate(string):
-        if c in mapping:
-            li[i] = mapping[c.replace('\'', '\"')]  # Normalize the quotes
+        li[i] = mapping.get(c, c)
 
     for sep in _quotes_block_regex.finditer(''.join(li)):
         li[sep.start()] = "“"
