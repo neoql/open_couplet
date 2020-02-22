@@ -2,6 +2,10 @@
 
 中文对联AI
 
+![](https://raw.githubusercontent.com/neoql/open_couplet/master/imgs/screenshot.png)
+
+可以访问 https://couplet.neoql.me 查看Demo
+
 ## 项目简述
 
 * 模型采用CNN+GRU+Attention<sup>1</sup>
