@@ -10,5 +10,5 @@ setup(
     author_email="neo_2048@163.com",
 
     packages=["open_couplet", "open_couplet.models"],
-    install_requires=["torch==1.3.1"]
+    install_requires=["torch==2.2.0"]
 )
